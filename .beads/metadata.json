@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "framelog",
+  "project_id": "d11423b6-c88a-46f8-902f-64347e1c01f4"
+}
