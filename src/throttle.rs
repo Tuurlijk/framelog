@@ -1,5 +1,13 @@
 use libamdgpu_top::AMDGPU::{ThrottleStatus, ThrottlerBit};
 
+use crate::model::{FlagActivitySummary, MetricSample};
+
+/// Legacy Yellow Carp / SMU13 `ThrottlerStatus` value with only PROCHOT_CPU (bit 9) and PROCHOT_GFX (bit 10).
+pub const LEGACY_YELLOW_CARP_PROCHOT_RAW: u32 = (1 << 9) | (1 << 10);
+
+const PROCHOT_STICKY_ACTIVE_PCT: f64 = 95.0;
+const LEGACY_RAW_SAMPLE_PCT: f64 = 90.0;
+
 /// Stable flag names for storage and API (matches `ThrottlerBit` debug names).
 pub fn flag_name(bit: ThrottlerBit) -> &'static str {
     match bit {
@@ -77,8 +85,12 @@ pub fn flag_description(name: &str) -> &'static str {
         "SPL" => "Socket power limit (slow package limit)",
         "SPPT" => "Slow package power tracking",
         "FPPT" => "Fast package power tracking",
-        "PROCHOT_CPU" => "CPU prochot / thermal throttle signal",
-        "PROCHOT_GPU" => "GPU prochot signal",
+        "PROCHOT_CPU" => {
+            "CPU prochot signal (may be sticky on gpu_metrics v2.1; see docs/prochot-status-investigation.md)"
+        }
+        "PROCHOT_GPU" => {
+            "GPU prochot signal (may be sticky on gpu_metrics v2.1; see docs/prochot-status-investigation.md)"
+        }
         "TEMP_HOTSPOT" => "Hotspot temperature limit",
         _ => "AMDGPU independent throttle bit",
     }
@@ -125,6 +137,65 @@ fn known_flag_names() -> Vec<&'static str> {
         "PPM",
         "FIT",
     ]
+}
+
+/// Legacy `throttle_status` with only PROCHOT bits set (common sticky pattern on Radeon 780M / v2.1).
+pub fn legacy_prochot_only_raw(raw: u32) -> bool {
+    raw == LEGACY_YELLOW_CARP_PROCHOT_RAW
+}
+
+/// PROCHOT flags always on in the window summary with no assert/clear transitions.
+pub fn prochot_sticky_from_activity(activity: &[FlagActivitySummary]) -> bool {
+    let Some(cpu) = activity.iter().find(|f| f.flag_name == "PROCHOT_CPU") else {
+        return false;
+    };
+    let Some(gpu) = activity.iter().find(|f| f.flag_name == "PROCHOT_GPU") else {
+        return false;
+    };
+    cpu.active_sample_pct >= PROCHOT_STICKY_ACTIVE_PCT
+        && gpu.active_sample_pct >= PROCHOT_STICKY_ACTIVE_PCT
+        && cpu.assert_count == 0
+        && gpu.assert_count == 0
+        && cpu.clear_count == 0
+        && gpu.clear_count == 0
+}
+
+/// Sticky PROCHOT likely from legacy `throttle_status` mapping, not proven emergency throttle.
+pub fn prochot_suspect_sticky_legacy(samples: &[MetricSample]) -> bool {
+    if samples.len() < 5 {
+        return false;
+    }
+    let prochot_samples = samples
+        .iter()
+        .filter(|s| {
+            s.active_flags.iter().any(|f| f == "PROCHOT_CPU")
+                && s.active_flags.iter().any(|f| f == "PROCHOT_GPU")
+        })
+        .count();
+    if prochot_samples * 100 / samples.len() < 90 {
+        return false;
+    }
+    let raws: Vec<u32> = samples
+        .iter()
+        .filter_map(|s| s.throttle_status_raw)
+        .collect();
+    if raws.is_empty() {
+        return false;
+    }
+    let legacy_only = raws.iter().filter(|r| legacy_prochot_only_raw(**r)).count();
+    (legacy_only as f64 / raws.len() as f64) * 100.0 >= LEGACY_RAW_SAMPLE_PCT
+}
+
+pub fn prochot_dashboard_warning() -> &'static str {
+    "PROCHOT_CPU and PROCHOT_GPU are always on with no transitions. On Radeon 780M / gpu_metrics v2.1 this often reflects legacy throttle_status bits 9+10 and may not mean real emergency thermal throttling. Verify temperature and performance; see docs/prochot-status-investigation.md."
+}
+
+pub fn prochot_warnings_from_activity(activity: &[FlagActivitySummary]) -> Vec<String> {
+    if prochot_sticky_from_activity(activity) {
+        vec![prochot_dashboard_warning().into()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Returns `(flag_name, old_active, new_active)` for each changed bit.
@@ -176,5 +247,30 @@ mod tests {
     fn catalog_covers_known_flags() {
         let catalog = catalog_flags();
         assert_eq!(catalog, known_flag_names());
+    }
+
+    #[test]
+    fn legacy_prochot_raw_is_1536() {
+        assert!(legacy_prochot_only_raw(1536));
+        assert!(!legacy_prochot_only_raw(1537));
+    }
+
+    #[test]
+    fn sticky_prochot_from_activity() {
+        let activity = vec![
+            FlagActivitySummary {
+                flag_name: "PROCHOT_CPU".into(),
+                active_sample_pct: 100.0,
+                assert_count: 0,
+                clear_count: 0,
+            },
+            FlagActivitySummary {
+                flag_name: "PROCHOT_GPU".into(),
+                active_sample_pct: 100.0,
+                assert_count: 0,
+                clear_count: 0,
+            },
+        ];
+        assert!(prochot_sticky_from_activity(&activity));
     }
 }

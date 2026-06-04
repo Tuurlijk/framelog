@@ -21,6 +21,7 @@
   </header>
   <main class="stack">
     <p id="mode-banner" class="status-banner is-live">Live database</p>
+    <p id="prochot-warn" class="warn-banner" hidden></p>
     <section class="controls controls--toolbar">
       <div class="toolbar-group toolbar-group--grow">
         <span class="toolbar-label">Time window</span>
@@ -177,6 +178,7 @@
     const analyzeNavLinkEl = document.getElementById('analysis-nav-link');
     const exportBtn = document.getElementById('export-btn');
     const highlightsEl = document.getElementById('highlights');
+    const prochotWarnEl = document.getElementById('prochot-warn');
     const metricNoteEl = document.getElementById('metric-note');
     const eventTimelineEl = document.getElementById('event-timeline');
     const transitionsEl = document.getElementById('transitions');
@@ -873,6 +875,16 @@
 
       const maxPwr = s.max_apu_power_mw != null ? (s.max_apu_power_mw / 1000).toFixed(1) + ' W' : '—';
       const maxTemp = fmtTempC(s.max_temperature_core);
+      const warn = (s.warnings && s.warnings.length) ? s.warnings[0] : null;
+      if (prochotWarnEl) {
+        if (warn) {
+          prochotWarnEl.textContent = warn;
+          prochotWarnEl.hidden = false;
+        } else {
+          prochotWarnEl.hidden = true;
+          prochotWarnEl.textContent = '';
+        }
+      }
       highlightsEl.innerHTML = `
         <div class="highlight-stat"><div class="label">Samples</div><div class="value">${s.sample_count}</div></div>
         <div class="highlight-stat is-important"><div class="label">Throttle events</div><div class="value">${s.throttle_transition_count}</div></div>

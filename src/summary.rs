@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::model::{
     ContextTransition, FlagActivitySummary, FlagTransition, MetricSample, WindowSummary,
 };
+use crate::throttle;
 
 pub fn summarize_window(
     from_ms: i64,
@@ -66,6 +67,8 @@ pub fn summarize_window(
         .filter_map(|s| s.temperature_core_max)
         .max_by(f64::total_cmp);
 
+    let warnings = throttle::prochot_warnings_from_activity(&flag_activity);
+
     WindowSummary {
         from_ms,
         to_ms,
@@ -76,5 +79,6 @@ pub fn summarize_window(
         max_apu_power_mw,
         avg_apu_power_mw,
         max_temperature_core,
+        warnings,
     }
 }

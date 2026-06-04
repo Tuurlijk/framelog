@@ -9,6 +9,7 @@ use crate::model::{
     ExportBundle, Finding, FindingConfidence, FindingSeverity, FlagTransition, JournalEvent,
     MetricSample, WindowSummary, EXPORT_FORMAT,
 };
+use crate::throttle;
 
 const SCHEMA_VERSION: u32 = 1;
 const MIN_SAMPLES: usize = 5;
@@ -411,8 +412,38 @@ fn run_analysis(mut input: AnalysisInput) -> AnalysisReport {
         });
     }
 
-    // Thermal shape
-    let thermal_flags = ["PROCHOT_CPU", "PROCHOT_GPU", "TEMP_HOTSPOT", "TEMP_CORE"];
+    let prochot_suspect = amd_throttle && throttle::prochot_suspect_sticky_legacy(&input.samples);
+    if prochot_suspect {
+        warnings.push(throttle::prochot_dashboard_warning().into());
+        findings.push(Finding {
+            id: "prochot_suspect_legacy_status".into(),
+            title: "PROCHOT flags may be sticky legacy status".into(),
+            severity: FindingSeverity::Info,
+            confidence: FindingConfidence::High,
+            summary: "PROCHOT_CPU and PROCHOT_GPU are always on with throttle_status_raw 1536 (legacy bits 9+10) and no transitions. This pattern is common on gpu_metrics v2.1 APUs and may not indicate real emergency thermal throttling.".into(),
+            evidence: vec![
+                EvidenceItem {
+                    ts_unix_ms: None,
+                    label: "throttle_status_raw".into(),
+                    detail: "often 1536 (0x600) on Radeon 780M / Yellow Carp".into(),
+                },
+                EvidenceItem {
+                    ts_unix_ms: None,
+                    label: "documentation".into(),
+                    detail: "docs/prochot-status-investigation.md".into(),
+                },
+            ],
+            related_throttle_transition_ids: vec![],
+            related_context_transition_ids: vec![],
+        });
+    }
+
+    // Thermal shape (exclude sticky legacy PROCHOT from thermal-family aggregation)
+    let thermal_flags: &[&str] = if prochot_suspect {
+        &["TEMP_HOTSPOT", "TEMP_CORE"]
+    } else {
+        &["PROCHOT_CPU", "PROCHOT_GPU", "TEMP_HOTSPOT", "TEMP_CORE"]
+    };
     let mut thermal_active = 0.0f64;
     if amd_throttle {
         for f in thermal_flags {
@@ -449,7 +480,7 @@ fn run_analysis(mut input: AnalysisInput) -> AnalysisReport {
             confidence: FindingConfidence::Medium,
             summary: "Thermal prochot or high core temperature appears in this window. This weakens a pure firmware SPL-cap hypothesis.".into(),
             evidence,
-            related_throttle_transition_ids: related_throttle_ids(&input.throttle_transitions, &thermal_flags),
+            related_throttle_transition_ids: related_throttle_ids(&input.throttle_transitions, thermal_flags),
             related_context_transition_ids: vec![],
         });
     }
@@ -936,6 +967,43 @@ mod tests {
             .iter()
             .any(|f| f.id == "framework_146_shape"));
         assert!(report.overall_verdict.contains("#146"));
+    }
+
+    #[test]
+    fn prochot_suspect_legacy_finding() {
+        let samples: Vec<MetricSample> = (0..10)
+            .map(|i| {
+                let mut s = sample(i * 500, &["PROCHOT_CPU", "PROCHOT_GPU"], 40_000);
+                s.throttle_status_raw = Some(throttle::LEGACY_YELLOW_CARP_PROCHOT_RAW);
+                s
+            })
+            .collect();
+        let bundle = ExportBundle {
+            schema_version: 1,
+            format: EXPORT_FORMAT.into(),
+            exported_at_ms: 0,
+            from_ms: 0,
+            to_ms: 5000,
+            device_pci_filter: None,
+            devices: vec![],
+            samples,
+            throttle_transitions: vec![],
+            throttle_journal_events: vec![],
+            context_snapshots: vec![],
+            context_values: vec![],
+            context_transitions: vec![],
+            context_journal_events: vec![],
+            system: None,
+            summary: None,
+            export_warnings: vec![],
+            analysis: None,
+        };
+        let report = analyze_bundle(&bundle, &AnalysisOptions::default());
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.id == "prochot_suspect_legacy_status"));
+        assert!(report.warnings.iter().any(|w| w.contains("PROCHOT_CPU")));
     }
 
     #[test]

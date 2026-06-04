@@ -5,6 +5,7 @@ use sqlx::Row;
 use crate::error::Result;
 use crate::model::{FlagActivitySummary, WindowSummary};
 use crate::store::Store;
+use crate::throttle;
 
 impl Store {
     pub async fn window_summary_sql(
@@ -58,6 +59,7 @@ impl Store {
             })
             .collect();
         flag_activity.sort_by(|a, b| a.flag_name.cmp(&b.flag_name));
+        let warnings = throttle::prochot_warnings_from_activity(&flag_activity);
 
         Ok(WindowSummary {
             from_ms,
@@ -69,6 +71,7 @@ impl Store {
             max_apu_power_mw,
             avg_apu_power_mw,
             max_temperature_core,
+            warnings,
         })
     }
 

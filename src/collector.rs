@@ -86,6 +86,7 @@ impl Collector for LibAmdgpuCollector {
             let (apu_power_mw, apu_power_source) = resolve_apu_power_mw(&metrics, is_apu);
 
             let mut extra = serde_json::json!({
+                "throttle_source": throttle_status_source(&metrics),
                 "average_apu_power_mw": metrics.get_average_apu_power(),
                 "average_cpu_power_mw": metrics.get_average_cpu_power(),
                 "average_socket_power_mw": metrics.get_average_socket_power(),
@@ -128,6 +129,17 @@ impl Collector for LibAmdgpuCollector {
 
 fn centi_celsius_to_celsius(value: u16) -> f64 {
     f64::from(value) / 100.0
+}
+
+/// How `indep_throttle_status` was obtained from `gpu_metrics` (see docs/prochot-status-investigation.md).
+fn throttle_status_source(metrics: &GpuMetrics) -> &'static str {
+    if metrics.get_indep_throttle_status_without_check().is_some() {
+        "indep_throttle_status"
+    } else if metrics.get_indep_throttle_status().is_some() {
+        "legacy_throttle_status_mapped"
+    } else {
+        "none"
+    }
 }
 
 pub(crate) fn valid_power_mw_u32(value: u32) -> bool {

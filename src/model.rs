@@ -165,6 +165,8 @@ pub struct WindowSummary {
     pub max_apu_power_mw: Option<u32>,
     pub avg_apu_power_mw: Option<u32>,
     pub max_temperature_core: Option<f64>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

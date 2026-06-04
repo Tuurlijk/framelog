@@ -73,8 +73,8 @@
               <tr><th>Flag</th><th>Plain meaning</th></tr>
             </thead>
             <tbody>
-              <tr><td><code>PROCHOT_CPU</code></td><td>CPU hot/throttle signal. The CPU side reports it is hot enough, or externally told, to reduce performance.</td></tr>
-              <tr><td><code>PROCHOT_GPU</code></td><td>GPU hot/throttle signal. The graphics side reports a thermal throttle condition.</td></tr>
+              <tr><td><code>PROCHOT_CPU</code></td><td>CPU prochot / emergency thermal signal. On Radeon 780M this can show 100% active from legacy <code>gpu_metrics</code> bits even when not truly throttling — see <code>docs/prochot-status-investigation.md</code> in the repo.</td></tr>
+              <tr><td><code>PROCHOT_GPU</code></td><td>GPU prochot signal. Same caveat as PROCHOT_CPU on Phoenix / 780M APUs.</td></tr>
               <tr><td><code>TEMP_HOTSPOT</code></td><td>The hottest sensor on the GPU/APU reached its limit. This can be higher than the average or edge temperature.</td></tr>
               <tr><td><code>TEMP_CORE</code></td><td>CPU/APU core temperature limit.</td></tr>
               <tr><td><code>TEMP_GPU</code></td><td>GPU temperature limit.</td></tr>

@@ -17,6 +17,8 @@ Local telemetry for **AMDGPU independent throttle flags**, correlated with **sys
 
 Collection is **read-only**: it does not change firmware, ACPI tables, or PMF settings.
 
+See [docs/prochot-status-investigation.md](docs/prochot-status-investigation.md) if **PROCHOT_CPU** / **PROCHOT_GPU** show 100% active on Radeon 780M — the raw metrics are often correct, but the meaning can be misleading on legacy `gpu_metrics` v2.1.
+
 > **Contribute:** Pull requests are welcome. Please report bugs, request features,
 > or share capture feedback in the
 > [framelog issue tracker](https://github.com/Tuurlijk/framelog/issues).
