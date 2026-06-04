@@ -1,0 +1,17 @@
+[Unit]
+Description=Framework firmware throttle flag logger (framelog)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/framelog run --db /var/lib/framelog/framelog.db --bind 127.0.0.1:8787 --journal-before-secs 60 --journal-after-secs 30
+Restart=on-failure
+RestartSec=5
+# Read gpu_metrics from sysfs; root is simplest on first install.
+User=root
+Group=root
+StateDirectory=framelog
+LogsDirectory=framelog
+
+[Install]
+WantedBy=multi-user.target

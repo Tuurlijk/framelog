@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>framelog — system reference</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="page-shell page-shell--wide">
+    <header class="site-header">
+      <h1>framelog system reference</h1>
+      <p class="sub">CPU/GPU inventory and notes for Framework power-limit debugging.</p>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="/">Dashboard</a>
+        <a href="/analyze">Analysis</a>
+        <a href="/system" aria-current="page">System reference</a>
+        <a href="/help">Help</a>
+      </nav>
+    </header>
+    <main class="stack">
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Service</h2>
+            <p id="service-meta" class="meta">Loading framelog service version…</p>
+          </div>
+        </div>
+        <div id="capabilities-detail"><p class="empty">Loading compatibility…</p></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Hardware inventory</h2>
+            <p id="system-meta" class="meta">Loading system inventory…</p>
+          </div>
+          <div class="panel-actions">
+            <button id="refresh" type="button">Refresh live inventory</button>
+          </div>
+        </div>
+        <div id="hardware-tables"><p class="empty">Loading…</p></div>
+      </section>
+
+      <section class="panel">
+        <h2>Why this page exists</h2>
+        <div class="callout">
+          <p>For export reviewers: machine context for
+          <a href="https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/146">Framework #146</a>
+          and similar power-cap reports. framelog ties throttle samples to dGPU runtime, PMF limits, charger/profile context, and journal messages. Storage serial numbers are omitted.</p>
+        </div>
+      </section>
+
+      <section class="docs-grid">
+        <article class="panel">
+          <h2>CPU fields</h2>
+          <ul>
+            <li><code>Model</code> / <code>Vendor</code> from procfs.</li>
+            <li><code>Logical CPUs</code> and <code>Physical cores</code> for capacity context.</li>
+            <li><code>Max MHz</code> from cpufreq when exposed (not a live sample).</li>
+          </ul>
+        </article>
+        <article class="panel">
+          <h2>GPU fields</h2>
+          <ul>
+            <li><code>Card</code> — DRM names such as <code>card0</code>.</li>
+            <li><code>PCI</code>, <code>Vendor ID</code>, <code>Device ID</code> identify the sampled GPU.</li>
+            <li><code>Driver</code> — expected kernel driver for the device.</li>
+          </ul>
+        </article>
+        <article class="panel">
+          <h2>Interpreting #146</h2>
+          <ul>
+            <li>Persistent <code>SPL</code>, <code>STAPM</code>, or <code>PROCHOT_CPU</code> with capped APU power.</li>
+            <li>Correlate with dGPU runtime suspend / D3cold state.</li>
+            <li>Check <code>pmf.spl_mw</code>, <code>sppt_mw</code>, STT skin temps at the same timestamps.</li>
+          </ul>
+        </article>
+        <article class="panel">
+          <h2>Data sources</h2>
+          <ul>
+            <li>CPU/OS: <code>/proc</code>, <code>/etc/os-release</code>.</li>
+            <li>GPU, BIOS, memory, storage: read-only <code>/sys</code>.</li>
+            <li>Live refresh: <code>POST /api/system/refresh</code>; exports embed the latest snapshot.</li>
+          </ul>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const serviceMetaEl = document.getElementById('service-meta');
+    const capabilitiesEl = document.getElementById('capabilities-detail');
+    const metaEl = document.getElementById('system-meta');
+    const tablesEl = document.getElementById('hardware-tables');
+    const refreshBtn = document.getElementById('refresh');
+
+    function esc(value) {
+      return String(value).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+    }
+
+    function fmtTime(ms) {
+      return ms ? new Date(ms).toLocaleString() : 'unknown time';
+    }
+
+    function value(v) {
+      return v == null || v === '' ? '<span class="unavailable">Unavailable</span>' : esc(v);
+    }
+
+    function renderKeyValueTable(rows) {
+      return `<div class="table-wrap"><table>
+        <thead><tr><th>Field</th><th>Value</th></tr></thead>
+        <tbody>${rows.map(([key, val]) => {
+          const imp = ['Model', 'Vendor', 'Max MHz'].includes(key);
+          return `<tr${imp ? ' class="row-highlight"' : ''}><th scope="row">${esc(key)}</th><td>${val}</td></tr>`;
+        }).join('')}</tbody></table></div>`;
+    }
+
+    function renderGpuTable(gpus) {
+      if (!gpus?.length) {
+        return '<p class="empty">No GPUs found in DRM sysfs.</p>';
+      }
+      const rows = gpus.map(g => `<tr>
+        <td><strong>${value(g.card)}</strong></td>
+        <td>${value(g.vendor_id)}</td>
+        <td>${value(g.device_id)}</td>
+        <td>${value(g.driver)}</td>
+        <td><code>${value(g.pci_address)}</code></td>
+      </tr>`).join('');
+      return `<div class="table-wrap"><table>
+        <thead><tr><th>Card</th><th>Vendor</th><th>Device</th><th>Driver</th><th>PCI</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+    }
+
+    function renderSystem(info) {
+      if (!info) {
+        metaEl.textContent = 'No cached inventory. Start framelog or refresh while running locally.';
+        tablesEl.innerHTML = '<p class="empty">No system details available.</p>';
+        return;
+      }
+      const warnings = info.warnings?.length ? ` · ${info.warnings.join('; ')}` : '';
+      metaEl.textContent = `Collected ${fmtTime(info.collected_at_ms)} · ${info.health}${warnings}`;
+      tablesEl.innerHTML = `
+        <h3>CPU</h3>
+        ${renderKeyValueTable([
+          ['Vendor', value(info.cpu?.vendor)],
+          ['Model', value(info.cpu?.model_name)],
+          ['Logical CPUs', value(info.cpu?.logical_cpus)],
+          ['Physical cores', value(info.cpu?.physical_cores)],
+          ['Max MHz', value(info.cpu?.max_frequency_mhz)],
+        ])}
+        <h3>GPU</h3>
+        ${renderGpuTable(info.gpus || [])}
+        <h3>OS</h3>
+        ${renderKeyValueTable([
+          ['Pretty name', value(info.os?.pretty_name)],
+          ['Kernel', value(info.os?.kernel_release)],
+          ['Distro', value(info.os?.distro_name)],
+        ])}
+      `;
+    }
+
+    async function fetchJson(path, options) {
+      const response = await fetch(path, options);
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      return response.json();
+    }
+
+    function renderCapabilities(cap) {
+      if (!cap) {
+        capabilitiesEl.innerHTML = '<p class="empty">Compatibility data unavailable.</p>';
+        return;
+      }
+      const sig = cap.signals || {};
+      const ed = cap.evidence_doctor || {};
+      const signalRows = [
+        ['Collector', esc(cap.selected_collector)],
+        ['Recommended', esc(cap.recommended_collector)],
+        ['Package power', sig.package_power ? esc(sig.package_power_label) : 'unavailable'],
+        ['AMD throttle flags', sig.amdgpu_throttle_flags ? 'yes' : 'no'],
+        ['gpu_metrics', sig.amdgpu_gpu_metrics ? 'yes' : 'no'],
+        ['PMF limits', sig.pmf_limits ? 'yes' : 'no'],
+        ['dGPU runtime', sig.dgpu_runtime ? 'yes' : 'no'],
+        ['Intel RAPL', sig.intel_rapl_sysfs ? 'yes' : 'no'],
+        ['Intel hwmon power', sig.intel_hwmon_power ? 'yes' : 'no'],
+      ];
+      const edRows = [
+        ['Framework #146 rules', ed.framework_146_rules ? 'enabled' : 'skipped'],
+        ['AMD throttle rules', ed.amd_throttle_rules ? 'enabled' : 'skipped'],
+        ['Generic power/thermal', ed.generic_power_thermal_rules ? 'enabled' : 'skipped'],
+      ];
+      const cards = (cap.drm_cards || []).map(c =>
+        `<tr><td>${esc(c.card)}</td><td>${esc(c.driver || '—')}</td><td><code>${esc(c.pci || '—')}</code></td>
+         <td>${c.likely_apu ? 'APU' : ''}${c.likely_dgpu ? 'dGPU' : ''}</td>
+         <td>${c.gpu_metrics_available ? 'yes' : 'no'}</td></tr>`
+      ).join('') || '<tr><td colspan="5" class="empty">No DRM cards</td></tr>';
+      const notes = (cap.notes || []).map(n => `<li>${esc(n)}</li>`).join('');
+      capabilitiesEl.innerHTML = `
+        <h3>Signals</h3>
+        ${renderKeyValueTable(signalRows)}
+        <h3>Evidence Doctor</h3>
+        ${renderKeyValueTable(edRows)}
+        <h3>DRM cards</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Card</th><th>Driver</th><th>PCI</th><th>Role</th><th>gpu_metrics</th></tr></thead>
+          <tbody>${cards}</tbody>
+        </table></div>
+        ${notes ? `<h3>Notes</h3><ul>${notes}</ul>` : ''}`;
+    }
+
+    async function loadServiceInfo() {
+      try {
+        const [health, cap] = await Promise.all([
+          fetchJson('/api/health'),
+          fetchJson('/api/capabilities'),
+        ]);
+        const version = health.version ? `v${health.version}` : 'unknown version';
+        const hash = health.git_hash || 'unknown';
+        const status = health.status || 'unknown';
+        serviceMetaEl.innerHTML = `framelog <strong>${esc(version)}</strong> · git <code>${esc(hash)}</code> · ${esc(status)}`;
+        renderCapabilities(cap);
+      } catch (err) {
+        serviceMetaEl.textContent = `Service metadata unavailable: ${err.message}`;
+        capabilitiesEl.innerHTML = '<p class="empty">Could not load compatibility report.</p>';
+      }
+    }
+
+    async function loadSystem({ refresh = false } = {}) {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = refresh ? 'Refreshing…' : 'Loading…';
+      try {
+        const info = await fetchJson(
+          refresh ? '/api/system/refresh' : '/api/system',
+          refresh ? { method: 'POST' } : undefined,
+        );
+        renderSystem(info);
+      } catch (err) {
+        metaEl.textContent = `System inventory failed: ${err.message}`;
+        tablesEl.innerHTML = '<p class="empty">Could not load system details.</p>';
+      } finally {
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = 'Refresh live inventory';
+      }
+    }
+
+    refreshBtn.addEventListener('click', () => loadSystem({ refresh: true }));
+    loadServiceInfo();
+    loadSystem();
+  </script>
+</body>
+</html>

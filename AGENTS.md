@@ -13,12 +13,21 @@ Core areas:
 - `src/store.rs` — SQLite schema and query layer.
 - `src/journal.rs` — systemd journal lookups around interesting transitions.
 - `src/service.rs` — sampler loop and transition orchestration.
+- `src/system_info.rs` — cached Linux system inventory from read-only
+  procfs/sysfs/os-release sources.
 - `src/web.rs` and `static/` — local API and graph UI.
 - `systemd/` — service unit examples.
 
 Keep data acquisition modular. Hardware, OS, and desktop context sources should
 be isolated behind small interfaces so future signals can be added without
 rewriting storage, transition logic, or the UI.
+
+For [Framework issue #146](https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/146)
+power-cap debugging, prioritize read-only evidence that ties together dGPU runtime
+state (`gpu_power`), AMD PMF limits from debugfs (`pmf`), charger/profile context,
+and AMDGPU throttle samples. Do not mutate firmware or SMU tables from the collector;
+full ACPI `STTC` extraction belongs in a future explicit inspect command, not the
+hot sampling loop.
 
 ---
 
@@ -76,6 +85,11 @@ framelog run --db ~/.local/share/framelog/framelog.db
 # No hardware required
 framelog inspect --collector fake
 framelog run --collector fake --db /tmp/framelog.db
+framelog capture --duration 60s --collector fake --skip-pre-backup
+framelog capabilities
+framelog inspect --collector intel
+framelog analyze export.json
+framelog dump --output-dir /tmp
 ```
 
 The web UI defaults to `http://127.0.0.1:8787`.
@@ -90,6 +104,11 @@ The web UI defaults to `http://127.0.0.1:8787`.
   fixes can reinterpret old data.
 - Treat hardware metrics as best effort. Store source health and raw values when
   possible instead of hiding missing permissions or unsupported devices.
+- Treat stable machine inventory (CPU, GPU, memory, storage, BIOS, Linux
+  version) as cached metadata. Harvest at service start and refresh daily rather
+  than sampling every tick.
+- Avoid exposing hardware serial numbers in UI/API/export unless the user
+  explicitly asks for them.
 - Keep transition detection deterministic and tested; avoid noisy transitions by
   bucketing or thresholds for analog values.
 - Do not add compatibility shims for unreleased internal data structures. When a

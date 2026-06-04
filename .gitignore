@@ -1,7 +1,26 @@
-/target
-Cargo.lock
+/target/
 
-# Beads / Dolt files (added by bd init)
-.dolt/
+# Runtime SQLite (telemetry DBs, smoke tests)
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Beads / Dolt (root-level; .beads/ has its own rules)
+.dolt/
 .beads-credential-key
+
+# CLI artifacts
+/framelog-capture-*/
+/framelog-dump-*.json
+/framelog-backup-*.json
+
+# Local secrets / env
+.env
+.env.*
+
+# Editor / agent (local plans; track .cursor/rules/ explicitly if needed)
+.cursor/
+
+# OS junk
+.DS_Store

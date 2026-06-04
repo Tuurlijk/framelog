@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>framelog — Evidence Doctor</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="page-shell page-shell--narrow">
+    <header class="site-header">
+      <h1>Evidence Doctor</h1>
+      <p class="sub" id="window-meta">Loading analysis…</p>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="/">Dashboard</a>
+        <a href="/analyze" aria-current="page">Analysis</a>
+        <a href="/system">System reference</a>
+        <a href="/help">Help</a>
+      </nav>
+    </header>
+    <main class="stack">
+      <section class="panel" id="actions" hidden>
+        <div class="panel-header">
+          <h2>Actions</h2>
+          <div class="panel-actions cluster">
+            <button type="button" id="copy-summary">Copy GitHub summary</button>
+            <button type="button" id="copy-ai" class="secondary">Copy AI prompt</button>
+            <button type="button" id="download-json" class="secondary">Download JSON</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="verdict-panel" hidden>
+        <h2>Verdict</h2>
+        <p class="hero-verdict" id="verdict"></p>
+        <div id="warnings"></div>
+        <div class="metric-grid" id="key-metrics"></div>
+      </section>
+
+      <section class="panel" id="findings-panel" hidden>
+        <h2>Findings</h2>
+        <div id="findings"></div>
+      </section>
+
+      <section class="panel empty-state-panel" id="empty-state" hidden>
+        <h2>Choose a range first</h2>
+        <p id="error" class="muted"></p>
+        <p class="section-note">Open the dashboard, set a time window, then click <strong>Analyze range</strong>.</p>
+        <a href="/" class="button">Back to dashboard</a>
+      </section>
+    </main>
+  </div>
+
+  <script src="/datasource.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const fromMs = params.has('from') ? Number(params.get('from')) : null;
+    const toMs = params.has('to') ? Number(params.get('to')) : null;
+    const devicePci = params.get('device_pci') || undefined;
+    const mode = params.get('mode') || 'live';
+
+    const windowMetaEl = document.getElementById('window-meta');
+    const errorEl = document.getElementById('error');
+    const verdictEl = document.getElementById('verdict');
+    const warningsEl = document.getElementById('warnings');
+    const keyMetricsEl = document.getElementById('key-metrics');
+    const findingsEl = document.getElementById('findings');
+    const actionsEl = document.getElementById('actions');
+    const verdictPanel = document.getElementById('verdict-panel');
+    const findingsPanel = document.getElementById('findings-panel');
+    const emptyStateEl = document.getElementById('empty-state');
+
+    let lastReport = null;
+    let lastAiPrompt = '';
+
+    function fmtTime(ms) {
+      return new Date(ms).toLocaleString();
+    }
+
+    function severityClass(sev) {
+      if (sev === 'important') return 'is-important';
+      if (sev === 'warning') return 'is-warning';
+      return '';
+    }
+
+    function badgeClass(sev) {
+      if (sev === 'important') return 'badge badge--danger';
+      if (sev === 'warning') return 'badge badge--warning';
+      return 'badge badge--muted';
+    }
+
+    function confidenceBadge(conf) {
+      if (conf === 'high') return 'badge badge--success';
+      if (conf === 'medium') return 'badge';
+      return 'badge badge--muted';
+    }
+
+    function githubSummary(report) {
+      const lines = [
+        `framelog analysis (${fmtTime(report.from_ms)} – ${fmtTime(report.to_ms)})`,
+        report.overall_verdict,
+        '',
+      ];
+      for (const f of report.findings.slice(0, 5)) {
+        lines.push(`- [${f.confidence}] ${f.title}: ${f.summary}`);
+      }
+      if (report.warnings.length) {
+        lines.push('', 'Limitations:', ...report.warnings.map(w => `- ${w}`));
+      }
+      return lines.join('\n');
+    }
+
+    function renderReport(data) {
+      const report = data.report;
+      lastReport = report;
+      lastAiPrompt = data.ai_prompt || '';
+      const dev = report.device_pci_filter ? ` · device ${report.device_pci_filter}` : '';
+      windowMetaEl.textContent =
+        `${fmtTime(report.from_ms)} → ${fmtTime(report.to_ms)}${dev} · ${mode === 'dump' ? 'export playback' : 'live database'}`;
+
+      const topFinding = report.findings.find(f => f.severity === 'important');
+      verdictEl.textContent = report.overall_verdict;
+      verdictEl.className = 'hero-verdict ' + (topFinding ? severityClass(topFinding.severity) : '');
+
+      warningsEl.innerHTML = report.warnings.length
+        ? '<div class="callout callout--spaced"><h3 class="callout-title">Data limitations</h3><ul>'
+          + report.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')
+          + '</ul></div>'
+        : '';
+
+      const fmtMetric = FramelogDataSources.formatKeyMetric;
+      const sortMetrics = FramelogDataSources.sortKeyMetricEntries;
+      const metrics = sortMetrics(Object.entries(report.key_metrics || {}));
+      keyMetricsEl.innerHTML = metrics.length
+        ? metrics.map(([k, v]) => {
+            const { label, value, important } = fmtMetric(k, v);
+            return `<div class="metric-card${important ? ' is-important' : ''}">
+              <div class="label">${escapeHtml(label)}</div>
+              <div class="value">${escapeHtml(value)}</div>
+            </div>`;
+          }).join('')
+        : '';
+
+      findingsEl.innerHTML = report.findings.length
+        ? report.findings.map(f => `
+          <article class="finding-card ${severityClass(f.severity)}">
+            <h3>${escapeHtml(f.title)}</h3>
+            <div class="finding-meta cluster">
+              <span class="${badgeClass(f.severity)}">${f.severity}</span>
+              <span class="${confidenceBadge(f.confidence)}">${f.confidence} confidence</span>
+            </div>
+            <p>${escapeHtml(f.summary)}</p>
+            ${evidenceHtml(f.evidence || [])}
+            ${metadataChips(f)}
+            ${journalHtml(f.evidence || [])}
+          </article>`).join('')
+        : '<p class="empty">No findings for this window.</p>';
+
+      actionsEl.hidden = false;
+      verdictPanel.hidden = false;
+      findingsPanel.hidden = false;
+      emptyStateEl.hidden = true;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function metadataChips(f) {
+      const parts = [];
+      if (f.related_throttle_transition_ids?.length) {
+        parts.push(`throttle ids: ${f.related_throttle_transition_ids.slice(0, 8).join(', ')}`);
+      }
+      if (f.related_context_transition_ids?.length) {
+        parts.push(`context ids: ${f.related_context_transition_ids.slice(0, 8).join(', ')}`);
+      }
+      if (!parts.length) return '';
+      return `<div class="evidence-chips">${parts.map(p => `<span>${escapeHtml(p)}</span>`).join('')}</div>`;
+    }
+
+    function evidenceHtml(items) {
+      const evidence = items.filter(e => {
+        const label = String(e.label);
+        return !label.startsWith('journal.') && !label.endsWith('_transition_ids');
+      });
+      if (!evidence.length) return '';
+      return '<ul>' + evidence.map(e => {
+        const ts = e.ts_unix_ms != null ? `<span class="ts">${fmtTime(e.ts_unix_ms)}</span> — ` : '';
+        return `<li>${ts}<strong>${escapeHtml(e.label)}:</strong> ${escapeHtml(e.detail)}</li>`;
+      }).join('') + '</ul>';
+    }
+
+    function journalHtml(items) {
+      const journal = items.filter(e => String(e.label).startsWith('journal.') && e.label !== 'journal.more');
+      if (!journal.length) return '';
+      const more = items.find(e => e.label === 'journal.more');
+      return `<details class="drilldown">
+        <summary>Relevant journal/syslog (${journal.length})</summary>
+        <ul class="journal-list">
+          ${journal.map(e => `
+            <li>
+              <div class="ts">${e.ts_unix_ms != null ? `${fmtTime(e.ts_unix_ms)} · ${e.ts_unix_ms} ms` : ''}</div>
+              <strong>${escapeHtml(e.label.replace(/^journal\\.?/, '') || 'system')}:</strong>
+              ${escapeHtml(e.detail)}
+            </li>
+          `).join('')}
+        </ul>
+        ${more ? `<p class="muted section-note">${escapeHtml(more.detail)}</p>` : ''}
+      </details>`;
+    }
+
+    async function loadLive() {
+      if (fromMs == null || toMs == null || Number.isNaN(fromMs) || Number.isNaN(toMs)) {
+        throw new Error('No range parameters were provided.');
+      }
+      const q = new URLSearchParams({ from: String(fromMs), to: String(toMs) });
+      if (devicePci) q.set('device_pci', devicePci);
+      const res = await fetch(`/api/findings?${q}`);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    async function loadDump() {
+      const raw = sessionStorage.getItem('framelog_pending_analyze_export');
+      if (!raw) {
+        throw new Error('No export is available for analysis in this browser session.');
+      }
+      const bundle = JSON.parse(raw);
+      const res = await fetch('/api/analyze/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bundle,
+          from_ms: fromMs,
+          to_ms: toMs,
+          device_pci: devicePci,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    async function init() {
+      try {
+        const data = mode === 'dump' ? await loadDump() : await loadLive();
+        renderReport(data);
+      } catch (err) {
+        errorEl.textContent = err.message || String(err);
+        windowMetaEl.textContent = 'Analysis unavailable';
+        emptyStateEl.hidden = false;
+        actionsEl.hidden = true;
+        verdictPanel.hidden = true;
+        findingsPanel.hidden = true;
+      }
+    }
+
+    document.getElementById('copy-summary').addEventListener('click', async () => {
+      if (!lastReport) return;
+      await navigator.clipboard.writeText(githubSummary(lastReport));
+    });
+    document.getElementById('copy-ai').addEventListener('click', async () => {
+      if (!lastAiPrompt) return;
+      await navigator.clipboard.writeText(lastAiPrompt);
+    });
+    document.getElementById('download-json').addEventListener('click', () => {
+      if (!lastReport) return;
+      const blob = new Blob([JSON.stringify(lastReport, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `framelog-analysis-${lastReport.from_ms}-${lastReport.to_ms}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    init();
+  </script>
+</body>
+</html>

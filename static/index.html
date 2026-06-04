@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>framelog — AMDGPU throttle flags</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="https://unpkg.com/uplot@1.6.31/dist/uPlot.min.css">
+</head>
+<body>
+  <div class="page-shell page-shell--wide">
+  <header class="site-header">
+    <h1>framelog</h1>
+    <p class="sub">AMDGPU throttle flags and system context (power, battery, display, profile, sleep)</p>
+    <nav class="top-nav" aria-label="Primary">
+      <a href="/" aria-current="page">Dashboard</a>
+      <a href="/system">System reference</a>
+      <a href="/help">Help</a>
+      <a href="/analyze" id="analysis-nav-link">Analysis</a>
+    </nav>
+  </header>
+  <main class="stack">
+    <p id="mode-banner" class="status-banner is-live">Live database</p>
+    <section class="controls controls--toolbar">
+      <div class="toolbar-group toolbar-group--grow">
+        <span class="toolbar-label">Time window</span>
+        <div class="segmented time-bar" id="presets">
+          <button type="button" class="secondary" data-ms="900000">15m</button>
+          <button type="button" class="secondary" data-ms="3600000">1h</button>
+          <button type="button" class="secondary" data-ms="21600000">6h</button>
+          <button type="button" class="secondary active" data-ms="86400000">24h</button>
+          <button type="button" class="secondary" data-ms="604800000">7d</button>
+          <button type="button" class="secondary" id="reset-latest">Latest</button>
+        </div>
+        <p class="range-summary" id="range-summary">Loading range…</p>
+        <div class="range-row">
+          <label class="field field--inline"><input type="checkbox" id="tail-mode" checked> Tail (live)</label>
+          <label class="field">From <input id="range-from" type="datetime-local"></label>
+          <label class="field">To <input id="range-to" type="datetime-local"></label>
+        </div>
+      </div>
+      <div class="toolbar-group">
+        <span class="toolbar-label">Filters</span>
+        <label class="field">Device
+          <select id="device"></select>
+        </label>
+        <label class="field">Flags
+          <select id="flags" multiple size="4"></select>
+        </label>
+        <div class="segmented" id="flag-presets">
+          <span class="segmented-label">Presets</span>
+          <button type="button" class="secondary" data-preset="power">Power</button>
+          <button type="button" class="secondary" data-preset="thermal">Thermal</button>
+          <button type="button" class="secondary" data-preset="current">Current</button>
+        </div>
+      </div>
+      <div class="toolbar-group">
+        <span class="toolbar-label">Actions</span>
+        <div class="cluster">
+          <button type="button" id="refresh">Refresh</button>
+          <button type="button" id="analyze-btn" class="secondary">Analyze range</button>
+          <button type="button" id="export-btn" class="secondary">Export window</button>
+          <button type="button" id="load-export-btn" class="secondary">Load export</button>
+          <button type="button" id="return-live-btn" class="secondary" hidden>Return to live</button>
+        </div>
+        <input id="load-export-input" type="file" accept="application/json,.json">
+      </div>
+      <p id="device-warn" class="warn-banner" hidden>
+        All devices selected — flag charts may mix unrelated GPUs. Pick a device for clearer readings.
+      </p>
+    </section>
+
+    <section class="panel" id="highlights-panel">
+      <h2>Highlights</h2>
+      <div id="highlights" class="highlights"><p class="empty">Loading…</p></div>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>Flag state</h2>
+        <p class="section-note">Drag on the chart to zoom the time window.</p>
+        <div id="chart"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Power &amp; temperature</h2>
+        <p id="metric-note" class="section-note"></p>
+        <div id="metric-chart"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Event timeline</h2>
+        <div class="playback-bar">
+          <button type="button" class="secondary" id="playback-prev" title="Previous event">◀ Prev</button>
+          <button type="button" class="secondary" id="playback-play">Play</button>
+          <button type="button" class="secondary" id="playback-next" title="Next event">Next ▶</button>
+          <label style="flex-direction:row;align-items:center;gap:.35rem">
+            <span>Speed</span>
+            <select id="playback-speed">
+              <option value="1">1×</option>
+              <option value="5" selected>5×</option>
+              <option value="30">30×</option>
+            </select>
+          </label>
+          <span id="playback-cursor">No events</span>
+        </div>
+        <p class="section-note">Click a row to center the chart window on that event. Playback steps through events in time order.</p>
+        <div id="event-timeline" class="table-wrap"><p class="empty">Loading…</p></div>
+      </section>
+
+      <section class="panel">
+        <h2>Throttle transitions</h2>
+        <div class="segmented" id="throttle-dir-filter">
+          <span class="segmented-label">Direction</span>
+          <button type="button" class="secondary active" data-dir="">All</button>
+          <button type="button" class="secondary" data-dir="asserted">Asserted only</button>
+          <button type="button" class="secondary" data-dir="cleared">Cleared only</button>
+        </div>
+        <div id="transitions"><p class="empty">Loading…</p></div>
+      </section>
+
+      <section class="panel">
+        <h2>Context sources</h2>
+        <div id="context-health"><p class="empty">Loading…</p></div>
+      </section>
+
+      <section class="controls">
+        <label class="field">Context metric (numeric)
+          <select id="context-key"></select>
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>Context metric</h2>
+        <p id="context-enum-note" class="enum-note" style="display:none"></p>
+        <div id="context-chart"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Context transitions</h2>
+        <div id="context-transitions"><p class="empty">Loading…</p></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>System details</h2>
+            <p class="meta" id="system-meta">Loading…</p>
+          </div>
+          <div class="panel-actions">
+            <button id="system-refresh" type="button" class="secondary">Refresh</button>
+          </div>
+        </div>
+        <div id="system-details"><p class="empty">Loading system details…</p></div>
+      </section>
+    </div>
+  </main>
+  </div>
+
+  <script src="https://unpkg.com/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+  <script src="/datasource.js"></script>
+  <script>
+    const MAX_POINTS = 2000;
+    const EVENT_WINDOW_MS = 15 * 60 * 1000;
+
+    const chartEl = document.getElementById('chart');
+    const metricChartEl = document.getElementById('metric-chart');
+    const deviceEl = document.getElementById('device');
+    const deviceWarnEl = document.getElementById('device-warn');
+    const flagsEl = document.getElementById('flags');
+    const flagPresetsEl = document.getElementById('flag-presets');
+    const tailModeEl = document.getElementById('tail-mode');
+    const rangeFromEl = document.getElementById('range-from');
+    const rangeToEl = document.getElementById('range-to');
+    const rangeSummaryEl = document.getElementById('range-summary');
+    const presetsEl = document.getElementById('presets');
+    const analyzeNavLinkEl = document.getElementById('analysis-nav-link');
+    const exportBtn = document.getElementById('export-btn');
+    const highlightsEl = document.getElementById('highlights');
+    const metricNoteEl = document.getElementById('metric-note');
+    const eventTimelineEl = document.getElementById('event-timeline');
+    const transitionsEl = document.getElementById('transitions');
+    const throttleDirFilterEl = document.getElementById('throttle-dir-filter');
+    const contextHealthEl = document.getElementById('context-health');
+    const contextKeyEl = document.getElementById('context-key');
+    const contextEnumNoteEl = document.getElementById('context-enum-note');
+    const contextChartEl = document.getElementById('context-chart');
+    const contextTransitionsEl = document.getElementById('context-transitions');
+    const systemMetaEl = document.getElementById('system-meta');
+    const systemDetailsEl = document.getElementById('system-details');
+
+    let plot = null;
+    let metricPlot = null;
+    let contextPlot = null;
+    let flagCatalog = [];
+    let throttleDirection = '';
+    let lastThrottleTransitions = [];
+    let lastContextTransitions = [];
+    let lastThrottleJournal = new Map();
+    let lastContextJournal = new Map();
+
+    const DEFAULT_CONTEXT_KEYS = [
+      'power.ac_connected',
+      'power.input_watts',
+      'power.adapter_watts_reported',
+      'pmf.spl_mw',
+      'pmf.sppt_mw',
+      'pmf.fppt_mw',
+      'pmf.stt_hs2_c',
+      'gpu_power.dgpu_runtime_suspended',
+      'battery.percent',
+      'display.external_count',
+    ];
+
+    const NUMERIC_CONTEXT_SUFFIXES = [
+      '.percent', '.watts', '_watts', '_mw', '_ms', '_c',
+      '.ac_connected', '.external_count', '.input_watts', '.adapter_watts_reported',
+      '.dgpu_runtime_suspended', '.dgpu_d3cold_allowed',
+    ];
+
+    const DEFAULT_FLAGS = ['SPL', 'PROCHOT_CPU', 'SPPT', 'FPPT', 'TEMP_HOTSPOT'];
+
+    const { ApiDataSource, DumpDataSource } = FramelogDataSources;
+
+    let timeBounds = null;
+    let capabilities = null;
+    const rangeState = { tail: true, presetMs: 86_400_000, from: null, to: null };
+    let dataSource = new ApiDataSource(api);
+    let lastDumpBundle = null;
+    const playbackState = { events: [], index: -1, timer: null, playing: false };
+
+    const modeBannerEl = document.getElementById('mode-banner');
+    const loadExportBtn = document.getElementById('load-export-btn');
+    const loadExportInput = document.getElementById('load-export-input');
+    const returnLiveBtn = document.getElementById('return-live-btn');
+    const playbackPrevEl = document.getElementById('playback-prev');
+    const playbackPlayEl = document.getElementById('playback-play');
+    const playbackNextEl = document.getElementById('playback-next');
+    const playbackSpeedEl = document.getElementById('playback-speed');
+    const playbackCursorEl = document.getElementById('playback-cursor');
+
+    function nowMs() { return Date.now(); }
+
+    function msToLocalInput(ms) {
+      const d = new Date(ms);
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function localInputToMs(s) {
+      if (!s) return null;
+      return new Date(s).getTime();
+    }
+
+    function range() {
+      const now = nowMs();
+      if (rangeState.tail) {
+        return { from: now - rangeState.presetMs, to: now };
+      }
+      const from = rangeState.from ?? (now - rangeState.presetMs);
+      const to = rangeState.to ?? now;
+      return { from: Math.min(from, to), to: Math.max(from, to) };
+    }
+
+    function syncRangeInputs() {
+      const { from, to } = range();
+      rangeFromEl.value = msToLocalInput(from);
+      rangeToEl.value = msToLocalInput(to);
+      const span = fmtTime(from) + ' → ' + fmtTime(to);
+      const tailLabel = dataSource.mode === 'dump' ? ' (export)' : (rangeState.tail ? ' (tailing)' : ' (fixed)');
+      const bounds = timeBounds && timeBounds.min_ts_ms != null
+        ? ` · data ${fmtTime(timeBounds.min_ts_ms)} – ${fmtTime(timeBounds.max_ts_ms)}`
+        : '';
+      rangeSummaryEl.textContent = span + tailLabel + bounds;
+      deviceWarnEl.hidden = !!deviceEl.value;
+      tailModeEl.disabled = dataSource.mode === 'dump';
+      analyzeNavLinkEl.href = analyzeUrl();
+    }
+
+    function queryOpts(extra = {}) {
+      const { from, to } = range();
+      return {
+        from,
+        to,
+        device_pci: deviceEl.value || undefined,
+        max_points: MAX_POINTS,
+        ...extra,
+      };
+    }
+
+    function updateModeBanner() {
+      const isDump = dataSource.mode === 'dump';
+      modeBannerEl.textContent = isDump
+        ? `Inspecting export — ${dataSource.label()}`
+        : 'Live database';
+      modeBannerEl.classList.toggle('is-export', isDump);
+      modeBannerEl.classList.toggle('is-live', !isDump);
+      returnLiveBtn.hidden = !isDump;
+      exportBtn.disabled = isDump;
+    }
+
+    async function enterDumpMode(bundle) {
+      stopPlayback();
+      lastDumpBundle = bundle;
+      dataSource = new DumpDataSource(bundle);
+      rangeState.tail = false;
+      tailModeEl.checked = false;
+      const meta = dataSource.exportMeta();
+      rangeState.from = meta.from_ms;
+      rangeState.to = meta.to_ms;
+      if (meta.device_pci_filter) {
+        deviceEl.value = meta.device_pci_filter;
+      }
+      updateModeBanner();
+      timeBounds = dataSource.timeBounds();
+      await loadDevices();
+      await loadFlags();
+      await loadContextKeys();
+      syncRangeInputs();
+      await loadSystemDetails();
+      await refresh();
+    }
+
+    function analyzeUrl() {
+      const { from, to } = range();
+      const params = new URLSearchParams({
+        from: String(from),
+        to: String(to),
+        mode: dataSource.mode === 'dump' ? 'dump' : 'live',
+      });
+      if (deviceEl.value) params.set('device_pci', deviceEl.value);
+      return `/analyze?${params}`;
+    }
+
+    function navigateToAnalyze() {
+      if (dataSource.mode === 'dump' && lastDumpBundle) {
+        sessionStorage.setItem(
+          'framelog_pending_analyze_export',
+          JSON.stringify(lastDumpBundle)
+        );
+      }
+      location.href = analyzeUrl();
+    }
+
+    async function exitDumpMode() {
+      stopPlayback();
+      lastDumpBundle = null;
+      dataSource = new ApiDataSource(api);
+      rangeState.tail = true;
+      tailModeEl.checked = true;
+      updateModeBanner();
+      await loadDevices();
+      await loadFlags();
+      await loadContextKeys();
+      await loadTimeBounds();
+      await loadSystemDetails();
+      setPreset(rangeState.presetMs);
+    }
+
+    function setPreset(ms) {
+      rangeState.presetMs = ms;
+      for (const btn of presetsEl.querySelectorAll('[data-ms]')) {
+        btn.classList.toggle('active', Number(btn.dataset.ms) === ms);
+      }
+      if (dataSource.mode === 'dump') {
+        rangeState.tail = false;
+        tailModeEl.checked = false;
+        const meta = dataSource.exportMeta();
+        const end = rangeState.to ?? meta.to_ms;
+        rangeState.from = Math.max(meta.from_ms, end - ms);
+        rangeState.to = end;
+        syncRangeInputs();
+        refresh();
+        return;
+      }
+      rangeState.tail = true;
+      tailModeEl.checked = true;
+      syncRangeInputs();
+      refresh();
+    }
+
+    function setAbsoluteRange(fromMs, toMs) {
+      rangeState.tail = false;
+      tailModeEl.checked = false;
+      rangeState.from = fromMs;
+      rangeState.to = toMs;
+      for (const btn of presetsEl.querySelectorAll('[data-ms]')) btn.classList.remove('active');
+      syncRangeInputs();
+      refresh();
+    }
+
+    function centerOnEvent(tsMs) {
+      const half = EVENT_WINDOW_MS / 2;
+      setAbsoluteRange(tsMs - half, tsMs + half);
+    }
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, options);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    function isNumericContextKey(key) {
+      return NUMERIC_CONTEXT_SUFFIXES.some(s => key.endsWith(s));
+    }
+
+    async function loadDevices() {
+      const data = await dataSource.devices();
+      deviceEl.innerHTML = '<option value="">All devices</option>';
+      for (const [pci, name] of data.devices || []) {
+        const opt = document.createElement('option');
+        opt.value = pci;
+        opt.textContent = `${pci} — ${name}`;
+        deviceEl.appendChild(opt);
+      }
+      if ((data.devices || []).length) {
+        deviceEl.value = data.devices[0][0];
+      }
+    }
+
+    function selectFlagsByNames(names) {
+      const set = new Set(names);
+      for (const opt of flagsEl.options) {
+        opt.selected = set.has(opt.value);
+      }
+    }
+
+    async function loadFlags() {
+      const data = await dataSource.flags();
+      flagCatalog = data.catalog || [];
+      const flags = [...new Set([...(data.flags || []), ...flagCatalog.map(c => c.name), ...DEFAULT_FLAGS])].sort();
+      flagsEl.innerHTML = '';
+      for (const flag of flags) {
+        const entry = flagCatalog.find(c => c.name === flag);
+        const opt = document.createElement('option');
+        opt.value = flag;
+        opt.textContent = entry ? `${flag} — ${entry.description}` : flag;
+        opt.title = entry?.description || flag;
+        opt.selected = DEFAULT_FLAGS.includes(flag);
+        flagsEl.appendChild(opt);
+      }
+    }
+
+    function selectedFlags() {
+      return [...flagsEl.selectedOptions].map(o => o.value);
+    }
+
+    function applyFlagPreset(category) {
+      const names = flagCatalog.filter(c => c.category === category).map(c => c.name);
+      if (!names.length) return;
+      selectFlagsByNames(names);
+      refresh();
+    }
+
+    async function loadSeries() {
+      const flags = selectedFlags();
+      if (!flags.length) {
+        chartEl.innerHTML = '<p class="empty">Select at least one flag.</p>';
+        if (plot) { plot.destroy(); plot = null; }
+        return;
+      }
+
+      const seriesList = await Promise.all(
+        flags.map(flag => dataSource.series(flag, queryOpts()))
+      );
+
+      const timestamps = new Set();
+      for (const s of seriesList) {
+        for (const p of s.points) timestamps.add(p.ts_unix_ms);
+      }
+      const xs = [...timestamps].sort((a, b) => a - b).map(ms => ms / 1000);
+      const data = [xs];
+
+      for (const s of seriesList) {
+        const map = new Map(s.points.map(p => [p.ts_unix_ms, p.value]));
+        data.push(xs.map(sec => map.get(Math.round(sec * 1000)) ?? null));
+      }
+
+      if (plot) { plot.destroy(); plot = null; }
+      chartEl.innerHTML = '';
+
+      plot = new uPlot({
+        width: chartEl.clientWidth,
+        height: 280,
+        series: [{}, ...seriesList.map(s => ({ label: s.flag, stroke: pickColor(s.flag), spanGaps: true }))],
+        axes: [
+          { stroke: '#888' },
+          { stroke: '#888', values: (u, vals) => vals.map(v => v == null ? '' : v) }
+        ],
+        scales: { y: { range: [0, 1.1] } },
+        legend: { show: true },
+        select: { show: true },
+        hooks: {
+          setSelect: [u => {
+            if (!u.select.width) return;
+            const fromSec = u.posToVal(u.select.left, 'x');
+            const toSec = u.posToVal(u.select.left + u.select.width, 'x');
+            setAbsoluteRange(Math.round(fromSec * 1000), Math.round(toSec * 1000));
+          }],
+        },
+      }, data, chartEl);
+    }
+
+    async function loadMetrics() {
+      const pkgLabel = packagePowerLabel() + ' (W)';
+      const powerSpecs = [
+        { metric: 'apu_power_mw', label: pkgLabel, stroke: '#f97316' },
+        { metric: 'current_stapm_limit_mw', label: 'Current STAPM limit (W)', stroke: '#f59e0b' },
+        { metric: 'stapm_limit_mw', label: 'STAPM limit (W)', stroke: '#eab308' },
+      ];
+      const [powerResults, temp] = await Promise.all([
+        Promise.all(powerSpecs.map(spec =>
+          dataSource.metrics(spec.metric, queryOpts())
+            .then(series => ({ ...spec, points: series.points || [] }))
+            .catch(() => ({ ...spec, points: [] }))
+        )),
+        dataSource.metrics('temperature_core_max', queryOpts()).catch(() => ({ points: [], unit: '°C' })),
+      ]);
+
+      const tsSet = new Set();
+      for (const series of powerResults) {
+        for (const p of series.points) tsSet.add(p.ts_unix_ms);
+      }
+      for (const p of temp.points) tsSet.add(p.ts_unix_ms);
+      if (!tsSet.size) {
+        metricChartEl.innerHTML = '<p class="empty">No power/temperature samples in range.</p>';
+        metricNoteEl.textContent = '';
+        if (metricPlot) { metricPlot.destroy(); metricPlot = null; }
+        return;
+      }
+
+      const xs = [...tsSet].sort((a, b) => a - b).map(ms => ms / 1000);
+      const availablePower = powerResults.filter(series => series.points.length);
+      const tempMap = new Map(temp.points.map(p => [p.ts_unix_ms, p.value]));
+      const data = [xs];
+      const series = [{}];
+      for (const power of availablePower) {
+        const map = new Map(power.points.map(p => [p.ts_unix_ms, p.value / 1000]));
+        data.push(xs.map(sec => map.get(Math.round(sec * 1000)) ?? null));
+        series.push({ label: power.label, stroke: power.stroke, spanGaps: true, scale: 'power' });
+      }
+      if (temp.points.length) {
+        data.push(xs.map(sec => tempMap.get(Math.round(sec * 1000)) ?? null));
+        series.push({ label: 'Core temp (°C)', stroke: '#06b6d4', spanGaps: true, scale: 'temp' });
+      }
+
+      if (metricPlot) { metricPlot.destroy(); metricPlot = null; }
+      metricChartEl.innerHTML = '';
+      metricNoteEl.textContent = availablePower.length
+        ? `Power series shown: ${availablePower.map(series => series.label).join(', ')}.`
+        : 'No measured APU/STAPM power samples in this window; showing temperature only.';
+
+      metricPlot = new uPlot({
+        width: metricChartEl.clientWidth,
+        height: 240,
+        series,
+        axes: [
+          { stroke: '#888' },
+          { stroke: '#f97316', scale: 'power', label: 'W' },
+          { stroke: '#06b6d4', scale: 'temp', side: 1, label: '°C' },
+        ],
+        scales: {
+          power: { auto: true },
+          temp: { auto: true },
+        },
+        legend: { show: true },
+      }, data, metricChartEl);
+    }
+
+    const COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#6366f1', '#a855f7'];
+    function pickColor(flag) {
+      let h = 0;
+      for (let i = 0; i < flag.length; i++) h = (h + flag.charCodeAt(i) * 17) % COLORS.length;
+      return COLORS[h];
+    }
+
+    function transitionLabel(t) {
+      const dir = t.new_value ? 'asserted' : 'cleared';
+      return `${t.flag_name} ${dir}`;
+    }
+
+    function formatJsonValue(v) {
+      if (v == null) return '—';
+      if (typeof v === 'string') return v;
+      return JSON.stringify(v);
+    }
+
+    function fmtTempC(v) {
+      return v == null ? '—' : `${Number(v).toFixed(1)} °C`;
+    }
+
+    async function fetchJournalBatch(ids, kind) {
+      if (!ids.length) return new Map();
+      const events = kind === 'context'
+        ? await dataSource.contextJournal(ids)
+        : await dataSource.transitionJournal(ids);
+      const map = new Map();
+      for (const e of events) {
+        const list = map.get(e.transition_id) || [];
+        list.push(e);
+        map.set(e.transition_id, list);
+      }
+      return map;
+    }
+
+    function renderJournalCell(id, journalMap) {
+      const journal = journalMap.get(id) || [];
+      if (!journal.length) return '<span class="empty">—</span>';
+      const body = journal.map(j =>
+        `<div class="journal">[${fmtTime(j.ts_unix_ms)}] ${esc(j.unit || '—')}: ${esc(j.message)}</div>`
+      ).join('');
+      return `<details class="journal-block"><summary><span class="badge badge-journal">${journal.length} journal</span></summary>${body}</details>`;
+    }
+
+    async function loadTransitions() {
+      const flags = selectedFlags();
+      const base = { limit: 100, direction: throttleDirection || undefined };
+      let items;
+      if (flags.length === 0) {
+        items = [];
+      } else if (flags.length === 1) {
+        items = await dataSource.transitions({ ...queryOpts(), ...base, flag_name: flags[0] });
+      } else {
+        const batches = await Promise.all(
+          flags.map(flag => dataSource.transitions({ ...queryOpts(), ...base, flag_name: flag }))
+        );
+        const byId = new Map();
+        for (const batch of batches) {
+          for (const item of batch) byId.set(item.id, item);
+        }
+        items = [...byId.values()].sort((a, b) => b.ts_unix_ms - a.ts_unix_ms).slice(0, 100);
+      }
+      lastThrottleTransitions = items;
+
+      if (!items.length) {
+        transitionsEl.innerHTML = '<p class="empty">No transitions in range for current filters.</p>';
+        lastThrottleJournal = new Map();
+        return;
+      }
+
+      lastThrottleJournal = await fetchJournalBatch(items.map(t => t.id), 'throttle');
+
+      const rows = items.map(t => {
+        const asserted = t.new_value;
+        const cls = asserted ? 'transition-assert' : 'transition-clear row-muted';
+        const rowCls = asserted ? '' : 'row-muted';
+        return `<tr class="${rowCls}">
+          <td>${fmtTime(t.ts_unix_ms)}</td>
+          <td>${esc(t.device_pci)}</td>
+          <td class="${cls}">${esc(transitionLabel(t))}</td>
+          <td>${renderJournalCell(t.id, lastThrottleJournal)}</td>
+        </tr>`;
+      });
+
+      transitionsEl.innerHTML = `<table>
+        <thead><tr><th>Time</th><th>Device</th><th>Transition</th><th>Journal</th></tr></thead>
+        <tbody>${rows.join('')}</tbody>
+      </table>`;
+    }
+
+    async function loadContextTransitions() {
+      const items = await dataSource.contextTransitions({ ...queryOpts(), limit: 100 });
+      lastContextTransitions = items;
+
+      if (!items.length) {
+        contextTransitionsEl.innerHTML = '<p class="empty">No context transitions in range.</p>';
+        lastContextJournal = new Map();
+        return;
+      }
+
+      lastContextJournal = await fetchJournalBatch(items.map(t => t.id), 'context');
+
+      const rows = items.map(t => `<tr>
+        <td>${fmtTime(t.ts_unix_ms)}</td>
+        <td>${esc(t.source_id)}</td>
+        <td><strong>${esc(t.key)}</strong></td>
+        <td><code>${esc(formatJsonValue(t.old_value))}</code> → <code>${esc(formatJsonValue(t.new_value))}</code></td>
+        <td>${renderJournalCell(t.id, lastContextJournal)}</td>
+      </tr>`);
+
+      contextTransitionsEl.innerHTML = `<table>
+        <thead><tr><th>Time</th><th>Source</th><th>Key</th><th>Change</th><th>Journal</th></tr></thead>
+        <tbody>${rows.join('')}</tbody>
+      </table>`;
+    }
+
+    function buildPlaybackEvents() {
+      const events = [];
+      for (const t of lastThrottleTransitions) {
+        const journal = lastThrottleJournal.get(t.id) || [];
+        events.push({
+          ts: t.ts_unix_ms,
+          type: 'throttle',
+          summary: transitionLabel(t),
+          source: t.device_pci,
+          journalCount: journal.length,
+        });
+      }
+      for (const t of lastContextTransitions) {
+        const journal = lastContextJournal.get(t.id) || [];
+        events.push({
+          ts: t.ts_unix_ms,
+          type: 'context',
+          summary: `${t.key}: ${formatJsonValue(t.old_value)} → ${formatJsonValue(t.new_value)}`,
+          source: t.source_id,
+          journalCount: journal.length,
+        });
+      }
+      events.sort((a, b) => a.ts - b.ts);
+      return events;
+    }
+
+    function updatePlaybackCursor() {
+      const { events, index } = playbackState;
+      if (!events.length) {
+        playbackCursorEl.textContent = 'No events in range';
+        return;
+      }
+      if (index < 0) {
+        playbackCursorEl.textContent = `${events.length} events (select Play or step)`;
+        return;
+      }
+      const e = events[index];
+      playbackCursorEl.textContent = `${index + 1} / ${events.length} · ${fmtTime(e.ts)} · ${e.summary}`;
+    }
+
+    function highlightPlaybackRow() {
+      const rows = eventTimelineEl.querySelectorAll('.event-row');
+      const idx = playbackState.index;
+      if (idx < 0 || !playbackState.events.length) {
+        rows.forEach(r => r.classList.remove('playback-active'));
+        return;
+      }
+      const targetTs = playbackState.events[idx]?.ts;
+      rows.forEach(row => {
+        row.classList.toggle('playback-active', Number(row.dataset.ts) === targetTs);
+      });
+    }
+
+    function stopPlayback() {
+      playbackState.playing = false;
+      if (playbackState.timer != null) {
+        clearInterval(playbackState.timer);
+        playbackState.timer = null;
+      }
+      playbackPlayEl.textContent = 'Play';
+    }
+
+    function seekPlayback(index) {
+      const { events } = playbackState;
+      if (!events.length) return;
+      playbackState.index = Math.max(0, Math.min(index, events.length - 1));
+      const e = events[playbackState.index];
+      centerOnEvent(e.ts);
+      updatePlaybackCursor();
+      highlightPlaybackRow();
+    }
+
+    function stepPlayback(delta) {
+      stopPlayback();
+      const { events, index } = playbackState;
+      if (!events.length) return;
+      const next = index < 0 ? (delta > 0 ? 0 : events.length - 1) : index + delta;
+      seekPlayback(next);
+    }
+
+    function togglePlayback() {
+      if (playbackState.playing) {
+        stopPlayback();
+        return;
+      }
+      if (!playbackState.events.length) return;
+      if (playbackState.index < 0) playbackState.index = 0;
+      playbackState.playing = true;
+      playbackPlayEl.textContent = 'Pause';
+      const speed = Number(playbackSpeedEl.value) || 5;
+      const intervalMs = Math.max(200, 1000 / speed);
+      seekPlayback(playbackState.index);
+      playbackState.timer = setInterval(() => {
+        if (playbackState.index >= playbackState.events.length - 1) {
+          stopPlayback();
+          return;
+        }
+        seekPlayback(playbackState.index + 1);
+      }, intervalMs);
+    }
+
+    function renderEventTimeline() {
+      const displayEvents = [];
+      for (const t of lastThrottleTransitions) {
+        const journal = lastThrottleJournal.get(t.id) || [];
+        displayEvents.push({
+          ts: t.ts_unix_ms,
+          type: 'throttle',
+          summary: transitionLabel(t),
+          source: t.device_pci,
+          journalCount: journal.length,
+        });
+      }
+      for (const t of lastContextTransitions) {
+        const journal = lastContextJournal.get(t.id) || [];
+        displayEvents.push({
+          ts: t.ts_unix_ms,
+          type: 'context',
+          summary: `${t.key}: ${formatJsonValue(t.old_value)} → ${formatJsonValue(t.new_value)}`,
+          source: t.source_id,
+          journalCount: journal.length,
+        });
+      }
+      displayEvents.sort((a, b) => b.ts - a.ts);
+
+      playbackState.events = buildPlaybackEvents();
+      if (playbackState.index >= playbackState.events.length) {
+        playbackState.index = playbackState.events.length - 1;
+      }
+      updatePlaybackCursor();
+
+      if (!displayEvents.length) {
+        eventTimelineEl.innerHTML = '<p class="empty">No events in range.</p>';
+        return;
+      }
+
+      const rows = displayEvents.slice(0, 150).map(e => `<tr class="event-row" data-ts="${e.ts}">
+        <td>${fmtTime(e.ts)}</td>
+        <td><span class="event-type ${e.type}">${e.type}</span></td>
+        <td>${esc(e.summary)}</td>
+        <td>${esc(e.source)}</td>
+        <td>${e.journalCount ? `<span class="badge badge-journal">${e.journalCount}</span>` : '<span class="empty">—</span>'}</td>
+      </tr>`).join('');
+
+      eventTimelineEl.innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Time</th><th>Type</th><th>Summary</th><th>Source</th><th>Journal</th></tr></thead>
+        <tbody>${rows.join('')}</tbody>
+      </table></div>`;
+
+      eventTimelineEl.querySelectorAll('.event-row').forEach(row => {
+        row.addEventListener('click', () => {
+          stopPlayback();
+          const ts = Number(row.dataset.ts);
+          const idx = playbackState.events.findIndex(e => e.ts === ts);
+          if (idx >= 0) playbackState.index = idx;
+          centerOnEvent(ts);
+          updatePlaybackCursor();
+          highlightPlaybackRow();
+        });
+      });
+      highlightPlaybackRow();
+    }
+
+    function packagePowerLabel() {
+      return capabilities?.signals?.package_power_label || 'Package power';
+    }
+
+    async function loadCapabilities() {
+      try {
+        capabilities = await api('/api/capabilities');
+      } catch {
+        capabilities = null;
+      }
+    }
+
+    async function loadSummary() {
+      const s = await dataSource.summary(queryOpts());
+      const pwrLabel = packagePowerLabel();
+      const topFlags = (s.flag_activity || [])
+        .filter(f => f.assert_count || f.clear_count || f.active_sample_pct > 0)
+        .slice(0, 6)
+        .map(f => `<div class="highlight-stat is-important">
+          <div class="label">${esc(f.flag_name)}</div>
+          <div class="value">${f.active_sample_pct.toFixed(0)}% active</div>
+          <div class="label">${f.assert_count}↑ ${f.clear_count}↓</div>
+        </div>`).join('');
+
+      const maxPwr = s.max_apu_power_mw != null ? (s.max_apu_power_mw / 1000).toFixed(1) + ' W' : '—';
+      const maxTemp = fmtTempC(s.max_temperature_core);
+      highlightsEl.innerHTML = `
+        <div class="highlight-stat"><div class="label">Samples</div><div class="value">${s.sample_count}</div></div>
+        <div class="highlight-stat is-important"><div class="label">Throttle events</div><div class="value">${s.throttle_transition_count}</div></div>
+        <div class="highlight-stat"><div class="label">Context events</div><div class="value">${s.context_transition_count}</div></div>
+        <div class="highlight-stat is-warning"><div class="label">Max ${esc(pwrLabel)}</div><div class="value">${maxPwr}</div></div>
+        <div class="highlight-stat"><div class="label">Avg ${esc(pwrLabel)}</div><div class="value">${s.avg_apu_power_mw != null ? (s.avg_apu_power_mw / 1000).toFixed(1) + ' W' : '—'}</div></div>
+        <div class="highlight-stat is-warning"><div class="label">Max core temp</div><div class="value">${maxTemp}</div></div>
+        ${topFlags}`;
+    }
+
+    function fmtTime(ms) {
+      return new Date(ms).toLocaleString();
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    async function loadContextHealth() {
+      const items = await dataSource.contextHealth();
+      if (!items.length) {
+        contextHealthEl.innerHTML = '<p class="empty">No context samples yet.</p>';
+        return;
+      }
+      const healthClass = h => {
+        const lower = String(h).toLowerCase();
+        if (lower === 'ok' || lower === 'healthy') return 'status-chip status-chip--ok';
+        if (lower === 'degraded' || lower === 'partial') return 'status-chip status-chip--warn';
+        return 'status-chip status-chip--err';
+      };
+      const rows = items.map(s => `<tr>
+        <td>${esc(s.source_id)}</td>
+        <td><span class="${healthClass(s.health)}">${esc(s.health)}</span></td>
+        <td>${fmtTime(s.ts_unix_ms)}</td>
+        <td>${s.error_message ? esc(s.error_message) : '<span class="empty">—</span>'}</td>
+      </tr>`).join('');
+      contextHealthEl.innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Source</th><th>Health</th><th>Last sample</th><th>Error</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+    }
+
+    async function loadContextKeys() {
+      const data = await dataSource.contextKeys();
+      const keys = [...new Set([...(data.keys || []), ...DEFAULT_CONTEXT_KEYS])].sort();
+      const numericKeys = keys.filter(isNumericContextKey);
+      contextKeyEl.innerHTML = '';
+      for (const key of numericKeys) {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = key;
+        contextKeyEl.appendChild(opt);
+      }
+      if (!contextKeyEl.value && numericKeys.length) contextKeyEl.value = numericKeys[0];
+    }
+
+    async function loadContextSeries() {
+      const key = contextKeyEl.value;
+      if (!key) {
+        contextChartEl.innerHTML = '<p class="empty">No numeric context keys available.</p>';
+        return;
+      }
+      const series = await dataSource.contextSeries(key, queryOpts());
+
+      if (series.value_kind === 'enum') {
+        contextEnumNoteEl.style.display = 'block';
+        contextEnumNoteEl.textContent = `${key} is categorical — see the event timeline and context transitions table instead of this chart.`;
+        if (contextPlot) { contextPlot.destroy(); contextPlot = null; }
+        contextChartEl.innerHTML = '';
+        return;
+      }
+
+      contextEnumNoteEl.style.display = 'none';
+      const xs = series.points.map(p => p.ts_unix_ms / 1000);
+      const ys = series.points.map(p => p.value);
+      if (contextPlot) { contextPlot.destroy(); contextPlot = null; }
+      contextChartEl.innerHTML = '';
+      if (!xs.length) {
+        contextChartEl.innerHTML = '<p class="empty">No samples for this key in range.</p>';
+        return;
+      }
+      contextPlot = new uPlot({
+        width: contextChartEl.clientWidth,
+        height: 240,
+        series: [{}, { label: key, stroke: pickColor(key), spanGaps: true }],
+        axes: [{ stroke: '#888' }, { stroke: '#888' }],
+        legend: { show: true },
+      }, [xs, ys], contextChartEl);
+    }
+
+    function valueOrEmpty(v) {
+      return v == null || v === '' ? '<span class="empty">Unavailable</span>' : esc(v);
+    }
+
+    function bytes(v) {
+      if (v == null) return '<span class="empty">Unavailable</span>';
+      const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+      let n = Number(v);
+      let i = 0;
+      while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+      return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+    }
+
+    function kib(v) {
+      return v == null ? '<span class="empty">Unavailable</span>' : bytes(Number(v) * 1024);
+    }
+
+    function card(title, rows) {
+      const body = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('');
+      return `<section class="detail-card"><h3>${esc(title)}</h3><dl class="kv">${body}</dl></section>`;
+    }
+
+    async function loadSystemDetails({ force = false } = {}) {
+      const button = document.getElementById('system-refresh');
+      const canForce = force && dataSource.mode === 'live';
+      if (canForce) {
+        button.disabled = true;
+        button.textContent = 'Refreshing…';
+        systemMetaEl.textContent = 'Refreshing system inventory…';
+      }
+      let info;
+      try {
+        info = canForce ? await dataSource.refreshSystem() : await dataSource.system();
+      } finally {
+        if (canForce) {
+          button.disabled = false;
+          button.textContent = 'Refresh';
+        }
+      }
+      if (!info) {
+        systemMetaEl.textContent = 'No cached system inventory yet. Start the collector service to harvest it.';
+        systemDetailsEl.innerHTML = '<p class="empty">No system details available.</p>';
+        return;
+      }
+
+      systemMetaEl.textContent = `Collected ${fmtTime(info.collected_at_ms)} · ${info.health}${info.warnings?.length ? ' · ' + info.warnings.join('; ') : ''}`;
+      const gpuRows = (info.gpus || []).map(g => card(`GPU ${g.card}`, [
+        ['Vendor ID', valueOrEmpty(g.vendor_id)],
+        ['Device ID', valueOrEmpty(g.device_id)],
+        ['Driver', valueOrEmpty(g.driver)],
+        ['PCI', valueOrEmpty(g.pci_address)],
+      ])).join('');
+      const storageRows = (info.storage || []).map(d => card(`Storage ${d.name}`, [
+        ['Model', valueOrEmpty(d.model)],
+        ['Firmware', valueOrEmpty(d.firmware_revision)],
+        ['Size', bytes(d.size_bytes)],
+        ['Rotational', d.rotational == null ? '<span class="empty">Unavailable</span>' : esc(d.rotational ? 'yes' : 'no')],
+        ['Logical block', valueOrEmpty(d.logical_block_size)],
+        ['Physical block', valueOrEmpty(d.physical_block_size)],
+      ])).join('');
+
+      systemDetailsEl.innerHTML = `<div class="details-grid">
+        ${card('CPU', [
+          ['Vendor', valueOrEmpty(info.cpu?.vendor)],
+          ['Model', valueOrEmpty(info.cpu?.model_name)],
+          ['Logical CPUs', valueOrEmpty(info.cpu?.logical_cpus)],
+          ['Physical cores', valueOrEmpty(info.cpu?.physical_cores)],
+          ['Max MHz', valueOrEmpty(info.cpu?.max_frequency_mhz)],
+        ])}
+        ${card('Memory', [
+          ['Total', kib(info.memory?.total_kib)],
+          ['Available', kib(info.memory?.available_kib)],
+          ['DIMMs', valueOrEmpty(info.memory?.dimm_count)],
+          ['Speed MT/s', valueOrEmpty(info.memory?.configured_speed_mt_s)],
+        ])}
+        ${card('BIOS', [
+          ['Vendor', valueOrEmpty(info.bios?.bios_vendor)],
+          ['Version', valueOrEmpty(info.bios?.bios_version)],
+          ['Date', valueOrEmpty(info.bios?.bios_date)],
+          ['Board', valueOrEmpty(info.bios?.board_name)],
+          ['Product', valueOrEmpty(info.bios?.product_name)],
+        ])}
+        ${card('Linux / OS', [
+          ['Kernel release', valueOrEmpty(info.os?.kernel_release)],
+          ['Kernel version', valueOrEmpty(info.os?.kernel_version)],
+          ['Distro', valueOrEmpty(info.os?.pretty_name || info.os?.distro_name)],
+          ['Version', valueOrEmpty(info.os?.distro_version)],
+        ])}
+        ${gpuRows || '<section class="detail-card"><h3>GPU</h3><p class="empty">Unavailable</p></section>'}
+        ${storageRows || '<section class="detail-card"><h3>Storage</h3><p class="empty">Unavailable</p></section>'}
+      </div>`;
+    }
+
+    async function refresh() {
+      syncRangeInputs();
+      await Promise.all([
+        loadSummary(),
+        loadSeries(),
+        loadMetrics(),
+        loadTransitions(),
+        loadContextHealth(),
+        loadContextSeries(),
+        loadContextTransitions(),
+      ]);
+      renderEventTimeline();
+    }
+
+    async function loadTimeBounds() {
+      timeBounds = await dataSource.timeBounds();
+      syncRangeInputs();
+    }
+
+    document.getElementById('analyze-btn').addEventListener('click', navigateToAnalyze);
+    analyzeNavLinkEl.addEventListener('click', e => {
+      e.preventDefault();
+      navigateToAnalyze();
+    });
+
+    async function exportWindow() {
+      const { from, to } = range();
+      const params = new URLSearchParams({ from: String(from), to: String(to), format: 'json' });
+      if (deviceEl.value) params.set('device_pci', deviceEl.value);
+      exportBtn.disabled = true;
+      exportBtn.textContent = 'Exporting…';
+      try {
+        const res = await fetch('/api/export?' + params);
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `framelog-export-${from}-${to}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } finally {
+        exportBtn.disabled = false;
+        exportBtn.textContent = 'Export window';
+      }
+    }
+
+    presetsEl.addEventListener('click', e => {
+      const btn = e.target.closest('[data-ms]');
+      if (btn) setPreset(Number(btn.dataset.ms));
+    });
+    document.getElementById('reset-latest').addEventListener('click', () => setPreset(rangeState.presetMs));
+    loadExportBtn.addEventListener('click', () => loadExportInput.click());
+    loadExportInput.addEventListener('change', async () => {
+      const file = loadExportInput.files?.[0];
+      loadExportInput.value = '';
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const bundle = JSON.parse(text);
+        await enterDumpMode(bundle);
+      } catch (err) {
+        alert(`Failed to load export: ${err.message || err}`);
+      }
+    });
+    returnLiveBtn.addEventListener('click', () => exitDumpMode());
+
+    playbackPrevEl.addEventListener('click', () => stepPlayback(-1));
+    playbackNextEl.addEventListener('click', () => stepPlayback(1));
+    playbackPlayEl.addEventListener('click', togglePlayback);
+    playbackSpeedEl.addEventListener('change', () => {
+      if (playbackState.playing) {
+        stopPlayback();
+        togglePlayback();
+      }
+    });
+
+    tailModeEl.addEventListener('change', () => {
+      if (dataSource.mode === 'dump') return;
+      rangeState.tail = tailModeEl.checked;
+      if (rangeState.tail) setPreset(rangeState.presetMs);
+      else {
+        rangeState.from = localInputToMs(rangeFromEl.value);
+        rangeState.to = localInputToMs(rangeToEl.value);
+        syncRangeInputs();
+        refresh();
+      }
+    });
+    rangeFromEl.addEventListener('change', () => {
+      rangeState.tail = false;
+      tailModeEl.checked = false;
+      rangeState.from = localInputToMs(rangeFromEl.value);
+      rangeState.to = localInputToMs(rangeToEl.value) ?? nowMs();
+      syncRangeInputs();
+      refresh();
+    });
+    rangeToEl.addEventListener('change', () => {
+      rangeState.tail = false;
+      tailModeEl.checked = false;
+      rangeState.from = localInputToMs(rangeFromEl.value) ?? (nowMs() - rangeState.presetMs);
+      rangeState.to = localInputToMs(rangeToEl.value);
+      syncRangeInputs();
+      refresh();
+    });
+
+    deviceEl.addEventListener('change', () => {
+      syncRangeInputs();
+      refresh();
+    });
+    flagsEl.addEventListener('change', refresh);
+    flagPresetsEl.addEventListener('click', e => {
+      const btn = e.target.closest('[data-preset]');
+      if (btn) applyFlagPreset(btn.dataset.preset);
+    });
+    throttleDirFilterEl.addEventListener('click', e => {
+      const btn = e.target.closest('[data-dir]');
+      if (!btn) return;
+      throttleDirection = btn.dataset.dir;
+      for (const b of throttleDirFilterEl.querySelectorAll('[data-dir]')) {
+        b.classList.toggle('active', b === btn);
+      }
+      loadTransitions().then(renderEventTimeline);
+    });
+
+    document.getElementById('refresh').addEventListener('click', refresh);
+    exportBtn.addEventListener('click', exportWindow);
+    document.getElementById('system-refresh').addEventListener('click', () => loadSystemDetails({ force: true }));
+    window.addEventListener('resize', () => {
+      if (plot) plot.setSize({ width: chartEl.clientWidth, height: 280 });
+      if (metricPlot) metricPlot.setSize({ width: metricChartEl.clientWidth, height: 240 });
+      if (contextPlot) contextPlot.setSize({ width: contextChartEl.clientWidth, height: 240 });
+    });
+
+    contextKeyEl.addEventListener('change', () => loadContextSeries());
+
+    (async () => {
+      updateModeBanner();
+      await loadCapabilities();
+      await loadDevices();
+      await loadFlags();
+      await loadContextKeys();
+      await loadTimeBounds();
+      await loadSystemDetails();
+      syncRangeInputs();
+      await refresh();
+      setInterval(() => {
+        if (dataSource.mode === 'dump') return;
+        if (rangeState.tail) syncRangeInputs();
+        refresh();
+      }, 15000);
+    })();
+  </script>
+</body>
+</html>

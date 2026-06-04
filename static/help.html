@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>framelog — help</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="page-shell page-shell--narrow">
+    <header class="site-header">
+      <h1>framelog help</h1>
+      <p class="sub">Capture evidence, inspect exports offline, or watch the live database while collection runs.</p>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="/">Dashboard</a>
+        <a href="/analyze">Analysis</a>
+        <a href="/system">System reference</a>
+        <a href="/help" aria-current="page">Help</a>
+      </nav>
+    </header>
+    <main class="stack">
+
+      <div class="callout callout--info">
+        <strong>Three ways to use the UI</strong>
+        <ol>
+          <li><strong>Live</strong> — collector writes to SQLite; dashboard reads the growing database (tail mode).</li>
+          <li><strong>Export playback</strong> — load a JSON bundle in the browser; nothing is written to the DB.</li>
+          <li><strong>Guided capture</strong> — CLI records a clean session folder for bug reports.</li>
+        </ol>
+      </div>
+
+      <section class="panel">
+        <h2>Evidence Doctor</h2>
+        <p>On the <a href="/">dashboard</a>, set the time window (presets or From/To), then click
+        <strong>Analyze range</strong> (or open <a href="/analyze">Analysis</a>). You get deterministic findings: Framework #146 shape, thermal vs power-cap signals, missing PMF, and related evidence.</p>
+        <p>Live DB: <code>GET /api/findings</code>. Loaded export: <code>POST /api/analyze/export</code> in the browser only (nothing is uploaded).</p>
+        <p>CLI: <code>framelog analyze export.json</code> (<code>--format json</code>, <code>--output</code>, <code>--ai-prompt</code>).</p>
+      </section>
+
+      <section class="panel">
+        <h2>Export limits</h2>
+        <p>Dashboard <strong>Export window</strong> and <code>GET /api/export</code> are limited to <strong>7 days</strong> and <strong>500k samples</strong>. For full history use <code>framelog dump</code> or a <code>capture</code> folder.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Throttle flags in plain English</h2>
+        <p>Each flag means firmware or hardware says "slow down for this reason" at that moment. A flag does not say how much performance was lost; it tells you which limit was active.</p>
+        <p>Good references: AMD SMI’s <a href="https://rocm.docs.amd.com/projects/amdsmi/en/develop/conceptual/gpu-violations.html">GPU violations</a> page explains <code>indep_throttle_status</code>, and the Linux kernel <a href="https://docs.kernel.org/gpu/amdgpu/thermal.html#gpu-metrics">AMDGPU gpu_metrics</a> docs explain the sysfs data source.</p>
+
+        <h3>Power limits</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Flag</th><th>Plain meaning</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>SPL</code></td><td>Socket/package power limit. Often the important one for Framework #146: the APU package is being held to a long-term power cap.</td></tr>
+              <tr><td><code>SPPT</code></td><td>A longer running power budget is active, so clocks may stay lower until average power drops.</td></tr>
+              <tr><td><code>FPPT</code></td><td>A short burst power budget is active; this often appears during quick spikes.</td></tr>
+              <tr><td><code>SPPT_APU</code></td><td>Sustained power budget for the APU side specifically.</td></tr>
+              <tr><td><code>PPT0</code>–<code>PPT3</code></td><td>Firmware-defined package power budgets. The number is an internal slot; use nearby PMF limits and power readings to interpret it.</td></tr>
+              <tr><td><code>APCC</code></td><td>Platform controller requested a power limit. Think "the laptop platform is asking the chip to back off."</td></tr>
+              <tr><td><code>PPM</code></td><td>Platform power management limit. A board, firmware, or OS policy is limiting power.</td></tr>
+              <tr><td><code>FIT</code></td><td>Reliability protection. Firmware is limiting boost to stay inside lifetime/aging safety rules.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Thermal limits</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Flag</th><th>Plain meaning</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>PROCHOT_CPU</code></td><td>CPU hot/throttle signal. The CPU side reports it is hot enough, or externally told, to reduce performance.</td></tr>
+              <tr><td><code>PROCHOT_GPU</code></td><td>GPU hot/throttle signal. The graphics side reports a thermal throttle condition.</td></tr>
+              <tr><td><code>TEMP_HOTSPOT</code></td><td>The hottest sensor on the GPU/APU reached its limit. This can be higher than the average or edge temperature.</td></tr>
+              <tr><td><code>TEMP_CORE</code></td><td>CPU/APU core temperature limit.</td></tr>
+              <tr><td><code>TEMP_GPU</code></td><td>GPU temperature limit.</td></tr>
+              <tr><td><code>TEMP_EDGE</code></td><td>GPU edge temperature limit, usually a sensor near the edge of the die.</td></tr>
+              <tr><td><code>TEMP_MEM</code></td><td>Graphics memory temperature limit.</td></tr>
+              <tr><td><code>TEMP_SOC</code></td><td>System-on-chip temperature limit.</td></tr>
+              <tr><td><code>TEMP_VR_GFX</code>, <code>TEMP_VR_SOC</code>, <code>TEMP_VR_MEM0</code>, <code>TEMP_VR_MEM1</code></td><td>Voltage regulator temperature limits. Power delivery parts are hot, not necessarily the silicon itself.</td></tr>
+              <tr><td><code>TEMP_LIQUID0</code>, <code>TEMP_LIQUID1</code></td><td>Liquid-cooling sensor limits. Usually irrelevant on a laptop unless firmware exposes placeholder bits.</td></tr>
+              <tr><td><code>VRHOT0</code>, <code>VRHOT1</code></td><td>Voltage regulator "hot" signals. The power delivery hardware is asking for reduced load.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Current limits</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Flag</th><th>Plain meaning</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>TDC_GFX</code></td><td>Sustained graphics current limit. The graphics rail is drawing too much current over time.</td></tr>
+              <tr><td><code>TDC_SOC</code></td><td>Sustained SoC current limit.</td></tr>
+              <tr><td><code>TDC_MEM</code></td><td>Sustained memory current limit.</td></tr>
+              <tr><td><code>TDC_VDD</code></td><td>Sustained core-voltage current limit.</td></tr>
+              <tr><td><code>TDC_CVIP</code></td><td>Sustained current limit for AMD's CVIP block, when present.</td></tr>
+              <tr><td><code>EDC_CPU</code></td><td>Short spike CPU current limit. A brief current burst exceeded the safe boost envelope.</td></tr>
+              <tr><td><code>EDC_GFX</code></td><td>Short spike graphics current limit.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Live inspection</h2>
+        <p>While <code>framelog run</code> or <code>framelog.service</code> is active, open the
+        <a href="/">dashboard</a>. Use <strong>Tail (live)</strong> and <strong>Refresh</strong> to follow new samples.</p>
+        <p>The UI is read-only for telemetry. <code>framelog inspect</code> prints one sample to the terminal only.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Export playback</h2>
+        <p>No separate playback daemon. Run <code>framelog serve</code> without a collector, then <strong>Load export</strong> and choose <code>export.json</code>.</p>
+        <pre>framelog serve --db /path/to/framelog.db</pre>
+        <p>The status banner switches to export mode; charts use the file in your browser only. Use <strong>Return to live</strong> on the dashboard to read the SQLite database again.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Modes at a glance</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Setup</th><th>Collector</th><th>UI data source</th><th>Writes DB?</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>framelog run</code> / systemd</td>
+                <td>Running</td>
+                <td>Live API</td>
+                <td>Yes</td>
+              </tr>
+              <tr>
+                <td><code>framelog serve</code> + dashboard</td>
+                <td>Stopped</td>
+                <td>Live API</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td><code>serve</code> + Load export</td>
+                <td>Stopped</td>
+                <td>JSON in browser</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td><code>capture</code> then Load export</td>
+                <td>During capture only</td>
+                <td><code>export.json</code></td>
+                <td>During capture only</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Guided capture</h2>
+        <p>Best for <a href="https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/146">Framework issue #146</a>.</p>
+        <p><code>capture</code> and <code>reset --yes</code> fail while the DB is still receiving samples. Stop <code>framelog.service</code> (or any collector on the same <code>--db</code>) and wait ~5s if you just stopped it.</p>
+        <h3>1. Stop the service</h3>
+        <pre>sudo systemctl stop framelog.service</pre>
+        <h3>2. Run capture</h3>
+        <pre>framelog capture --duration 20m --issue framework-146</pre>
+        <pre>framelog-capture-framework-146-&lt;timestamp&gt;/
+  export.json
+  analysis.json
+  manifest.json
+  system.json
+  report.md
+  summary.txt
+  pre_capture_backup.json   # unless --skip-pre-backup</pre>
+        <h3>3. Inspect offline</h3>
+        <pre>framelog serve
+# Load export → export.json</pre>
+        <h3>4. Optional dump / reset</h3>
+        <pre>framelog dump --output-dir ~/exports
+framelog reset --yes --backup-dir ~/exports</pre>
+      </section>
+
+      <section class="panel">
+        <h2>CLI commands</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Command</th><th>Purpose</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>run</code></td><td>Collector + web UI (systemd default)</td></tr>
+              <tr><td><code>collect</code></td><td>Collector only</td></tr>
+              <tr><td><code>serve</code></td><td>Web UI only</td></tr>
+              <tr><td><code>inspect</code></td><td>Capabilities probe + one live sample (JSON)</td></tr>
+              <tr><td><code>capabilities</code></td><td>Hardware signals, recommended collector, Evidence Doctor rules</td></tr>
+              <tr><td><code>capture</code></td><td>Backup, reset, collect, export folder</td></tr>
+              <tr><td><code>dump</code></td><td>JSON export from DB (no web limits)</td></tr>
+              <tr><td><code>analyze</code></td><td>Findings from <code>export.json</code></td></tr>
+              <tr><td><code>reset --yes</code></td><td>Clear telemetry (backup first)</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="section-note">Global flags: <code>--db</code>, <code>--interval-ms</code>, <code>--bind</code>, journal window, <code>--apu-only</code>, <code>--collector</code> (<code>lib-amdgpu</code>, <code>intel</code>, <code>fake</code>, <code>amdgpu-top-json</code>). On Intel Framework laptops use <code>--collector intel</code>; AMD throttle/SPL rules do not apply. <code>GET /api/capabilities</code> mirrors the CLI probe. See the README compatibility table.</p>
+      </section>
+
+      <section class="panel">
+        <h2>After capture</h2>
+        <pre>sudo systemctl start framelog.service</pre>
+        <p>The capture folder on disk is independent of restarting the service.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Contribute</h2>
+        <p>Pull requests welcome. Report bugs and share feedback in the
+        <a href="https://github.com/Tuurlijk/framelog/issues">framelog issue tracker</a>.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Related pages</h2>
+        <ul>
+          <li><a href="/">Dashboard</a> — charts, timeline, export, analysis</li>
+          <li><a href="/analyze">Analysis</a> — Evidence Doctor</li>
+          <li><a href="/system">System reference</a> — CPU/GPU inventory</li>
+        </ul>
+      </section>
+
+    </main>
+  </div>
+</body>
+</html>

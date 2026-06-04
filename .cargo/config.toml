@@ -1,0 +1,16 @@
+[build]
+# Keep local absolute paths (including the user home path) out of generated
+# binaries, panic locations, and debug metadata.
+rustflags = [
+  "--remap-path-prefix=/home/michiel/Projects/Rust/framelog=framelog",
+  "--remap-path-prefix=/home/michiel/.cargo=/cargo",
+  "--remap-path-prefix=/home/michiel/.rustup=/rustup",
+  "--remap-path-prefix=/home/michiel=~",
+]
+dep-info-basedir = "."
+
+[env]
+# Some dependencies compile C code (for example bundled SQLite). These flags
+# give clang/gcc the same path remapping as rustc.
+CFLAGS = { value = "-ffile-prefix-map=/home/michiel/Projects/Rust/framelog=framelog -ffile-prefix-map=/home/michiel/.cargo=/cargo -ffile-prefix-map=/home/michiel/.rustup=/rustup -ffile-prefix-map=/home/michiel=~", force = false }
+CXXFLAGS = { value = "-ffile-prefix-map=/home/michiel/Projects/Rust/framelog=framelog -ffile-prefix-map=/home/michiel/.cargo=/cargo -ffile-prefix-map=/home/michiel/.rustup=/rustup -ffile-prefix-map=/home/michiel=~", force = false }

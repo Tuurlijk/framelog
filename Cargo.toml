@@ -1,0 +1,36 @@
+[package]
+name = "framelog"
+version = "0.1.0"
+edition = "2021"
+description = "Log AMDGPU throttle flags and correlate with systemd journal for Framework laptop firmware debugging"
+authors = ["Michiel Roos <framelog.free.bra@michielroos.com>"]
+license = "MIT"
+repository = "https://github.com/Tuurlijk/framelog"
+readme = "README.md"
+keywords = ["amdgpu", "framework", "throttle", "systemd", "telemetry"]
+categories = ["command-line-utilities", "hardware-support"]
+
+[dependencies]
+axum = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+libamdgpu_top = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sdjournal = "0.1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zbus = { version = "5", features = ["blocking-api"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+# Optimize release builds for speed and size
+[profile.release]
+opt-level = 'z'
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
