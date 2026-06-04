@@ -90,6 +90,12 @@
       </section>
 
       <section class="panel">
+        <h2>CPU frequency</h2>
+        <p class="section-note">Live cpufreq readings across online CPUs: minimum, average, and maximum.</p>
+        <div id="cpu-freq-chart"></div>
+      </section>
+
+      <section class="panel">
         <h2>Event timeline</h2>
         <div class="playback-bar">
           <button type="button" class="secondary" id="playback-prev" title="Previous event">◀ Prev</button>
@@ -166,6 +172,7 @@
 
     const chartEl = document.getElementById('chart');
     const metricChartEl = document.getElementById('metric-chart');
+    const cpuFreqChartEl = document.getElementById('cpu-freq-chart');
     const deviceEl = document.getElementById('device');
     const deviceWarnEl = document.getElementById('device-warn');
     const flagsEl = document.getElementById('flags');
@@ -193,6 +200,7 @@
 
     let plot = null;
     let metricPlot = null;
+    let cpuFreqPlot = null;
     let contextPlot = null;
     let flagCatalog = [];
     let throttleDirection = '';
@@ -209,20 +217,22 @@
       'pmf.sppt_mw',
       'pmf.fppt_mw',
       'pmf.stt_hs2_c',
+      'cpu.cur_freq_min_mhz',
+      'cpu.cur_freq_avg_mhz',
       'gpu_power.dgpu_runtime_suspended',
       'battery.percent',
       'display.external_count',
     ];
 
     const NUMERIC_CONTEXT_SUFFIXES = [
-      '.percent', '.watts', '_watts', '_mw', '_ms', '_c',
+      '.percent', '.watts', '_watts', '_mw', '_ms', '_c', '_mhz',
       '.ac_connected', '.external_count', '.input_watts', '.adapter_watts_reported',
-      '.dgpu_runtime_suspended', '.dgpu_d3cold_allowed',
+      '.dgpu_runtime_suspended', '.dgpu_d3cold_allowed', '.online_cpus',
     ];
 
     const DEFAULT_FLAGS = ['SPL', 'PROCHOT_CPU', 'SPPT', 'FPPT', 'TEMP_HOTSPOT'];
 
-    const { ApiDataSource, DumpDataSource } = FramelogDataSources;
+    const { ApiDataSource, DumpDataSource, contextKeyLabel } = FramelogDataSources;
 
     let timeBounds = null;
     let capabilities = null;
@@ -567,6 +577,53 @@
         },
         legend: { show: true },
       }, data, metricChartEl);
+    }
+
+    async function loadCpuFreqChart() {
+      const specs = [
+        { key: 'cpu.cur_freq_min_mhz', label: 'Min MHz', stroke: '#60a5fa' },
+        { key: 'cpu.cur_freq_avg_mhz', label: 'Avg MHz', stroke: '#fbbf24' },
+        { key: 'cpu.cur_freq_max_mhz', label: 'Max MHz', stroke: '#f97316' },
+      ];
+      const results = await Promise.all(
+        specs.map(spec =>
+          dataSource.contextSeries(spec.key, queryOpts()).catch(() => ({
+            key: spec.key,
+            value_kind: 'number',
+            points: [],
+          }))
+        )
+      );
+
+      const tsSet = new Set();
+      for (const series of results) {
+        for (const p of series.points) tsSet.add(p.ts_unix_ms);
+      }
+      if (!tsSet.size) {
+        if (cpuFreqPlot) { cpuFreqPlot.destroy(); cpuFreqPlot = null; }
+        cpuFreqChartEl.innerHTML = '<p class="empty">No CPU frequency samples in range. Restart the service with a build that includes CPU context.</p>';
+        return;
+      }
+
+      const tsMs = [...tsSet].sort((a, b) => a - b);
+      const xs = tsMs.map(ms => ms / 1000);
+      const data = [xs];
+      const series = [{}];
+      for (const [idx, spec] of specs.entries()) {
+        const map = new Map(results[idx].points.map(p => [p.ts_unix_ms, p.value]));
+        data.push(tsMs.map(ms => map.get(ms) ?? null));
+        series.push({ label: spec.label, stroke: spec.stroke, spanGaps: true });
+      }
+
+      if (cpuFreqPlot) { cpuFreqPlot.destroy(); cpuFreqPlot = null; }
+      cpuFreqChartEl.innerHTML = '';
+      cpuFreqPlot = new uPlot({
+        width: cpuFreqChartEl.clientWidth,
+        height: 240,
+        series,
+        axes: [{ stroke: '#888' }, { stroke: '#888', label: 'MHz' }],
+        legend: { show: true },
+      }, data, cpuFreqChartEl);
     }
 
     const COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#6366f1', '#a855f7'];
@@ -935,7 +992,7 @@
       for (const key of numericKeys) {
         const opt = document.createElement('option');
         opt.value = key;
-        opt.textContent = key;
+        opt.textContent = contextKeyLabel(key);
         contextKeyEl.appendChild(opt);
       }
       if (!contextKeyEl.value && numericKeys.length) contextKeyEl.value = numericKeys[0];
@@ -1074,6 +1131,7 @@
         loadSummary(),
         loadSeries(),
         loadMetrics(),
+        loadCpuFreqChart(),
         loadTransitions(),
         loadContextHealth(),
         loadContextSeries(),
@@ -1198,6 +1256,7 @@
     window.addEventListener('resize', () => {
       if (plot) plot.setSize({ width: chartEl.clientWidth, height: 280 });
       if (metricPlot) metricPlot.setSize({ width: metricChartEl.clientWidth, height: 240 });
+      if (cpuFreqPlot) cpuFreqPlot.setSize({ width: cpuFreqChartEl.clientWidth, height: 240 });
       if (contextPlot) contextPlot.setSize({ width: contextChartEl.clientWidth, height: 240 });
     });
 

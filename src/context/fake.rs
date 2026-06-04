@@ -169,3 +169,55 @@ impl ContextSource for FakeGpuPowerSource {
         default_diff(previous, current)
     }
 }
+
+pub struct FakeCpuSource {
+    tick: AtomicU64,
+}
+
+impl FakeCpuSource {
+    pub fn new() -> Self {
+        Self {
+            tick: AtomicU64::new(0),
+        }
+    }
+}
+
+impl ContextSource for FakeCpuSource {
+    fn id(&self) -> &'static str {
+        "cpu"
+    }
+
+    fn sample(&mut self, ts_unix_ms: i64) -> ContextSnapshot {
+        let t = self.tick.fetch_add(1, Ordering::Relaxed);
+        let phase = t % 90;
+        let (min_mhz, avg_mhz, max_mhz) = if phase < 30 {
+            (2800.0, 3200.0, 4800.0)
+        } else if phase < 60 {
+            (545.0, 548.0, 550.0)
+        } else {
+            (1400.0, 1420.0, 1450.0)
+        };
+        let values = vec![
+            ContextValue::num("cur_freq_min_mhz", min_mhz),
+            ContextValue::num("cur_freq_avg_mhz", avg_mhz),
+            ContextValue::num("cur_freq_max_mhz", max_mhz),
+            ContextValue::num("scaling_max_freq_mhz", 4800.0),
+            ContextValue::num("online_cpus", 8.0),
+            ContextValue::str("governor", "powersave"),
+        ];
+        snapshot_ok(
+            "cpu",
+            ts_unix_ms,
+            values,
+            json!({ "fake": true, "phase": phase }),
+        )
+    }
+
+    fn diff(
+        &self,
+        previous: Option<&ContextSnapshot>,
+        current: &ContextSnapshot,
+    ) -> Vec<ContextTransition> {
+        default_diff(previous, current)
+    }
+}

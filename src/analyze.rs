@@ -19,6 +19,11 @@ const LOW_APU_POWER_MW: u32 = 45_000;
 const LOW_PMF_SPL_MW: f64 = 40_000.0;
 const THERMAL_FLAG_ACTIVE_PCT: f64 = 15.0;
 const THERMAL_TEMP_C: f64 = 85.0;
+const CPU_LOCK_545_LOW_MHZ: f64 = 500.0;
+const CPU_LOCK_545_HIGH_MHZ: f64 = 620.0;
+const CPU_LOCK_1400_LOW_MHZ: f64 = 1350.0;
+const CPU_LOCK_1400_HIGH_MHZ: f64 = 1450.0;
+const CPU_FREQ_LOCK_PCT: f64 = 50.0;
 
 #[derive(Clone, Debug)]
 struct AnalysisInput {
@@ -359,6 +364,97 @@ fn run_analysis(mut input: AnalysisInput) -> AnalysisReport {
         key_metrics.insert("pmf_spl_mw".into(), format!("{v:.0}"));
     }
 
+    let pct_cpu_545 = crate::context::cpu::context_freq_band_pct(
+        &input.context_values,
+        CPU_LOCK_545_LOW_MHZ,
+        CPU_LOCK_545_HIGH_MHZ,
+    );
+    let pct_cpu_1400 = crate::context::cpu::context_freq_band_pct(
+        &input.context_values,
+        CPU_LOCK_1400_LOW_MHZ,
+        CPU_LOCK_1400_HIGH_MHZ,
+    );
+    let latest_cpu_min_mhz = latest_context_num(&input.context_values, "cpu.cur_freq_min_mhz");
+    if let Some(v) = latest_cpu_min_mhz {
+        key_metrics.insert("cpu_cur_freq_min_mhz".into(), format!("{v:.0}"));
+    }
+    if let Some(pct) = pct_cpu_545 {
+        key_metrics.insert("cpu_freq_545_band_pct".into(), format!("{pct:.1}"));
+    }
+    if let Some(pct) = pct_cpu_1400 {
+        key_metrics.insert("cpu_freq_1400_band_pct".into(), format!("{pct:.1}"));
+    }
+
+    if pct_cpu_545.is_some_and(|p| p >= CPU_FREQ_LOCK_PCT) {
+        let pct = pct_cpu_545.unwrap();
+        findings.push(Finding {
+            id: "cpu_frequency_lock".into(),
+            title: "CPU frequency locked near 544–545 MHz".into(),
+            severity: FindingSeverity::Warning,
+            confidence: if pct >= 80.0 {
+                FindingConfidence::High
+            } else {
+                FindingConfidence::Medium
+            },
+            summary: format!(
+                "Minimum CPU frequency stayed in the 544–545 MHz band for {pct:.0}% of cpufreq samples. This matches the Framework BIOS 4.04 long-idle frequency-lock report and is separate from the 35W SPL cap pattern."
+            ),
+            evidence: vec![
+                EvidenceItem {
+                    ts_unix_ms: latest_context_ts(&input.context_values, "cpu.cur_freq_min_mhz"),
+                    label: "cpu.cur_freq_min_mhz (latest)".into(),
+                    detail: latest_cpu_min_mhz
+                        .map(|v| format!("{v:.0} MHz"))
+                        .unwrap_or_else(|| "unknown".into()),
+                },
+                EvidenceItem {
+                    ts_unix_ms: None,
+                    label: "cpu_freq_545_band_pct".into(),
+                    detail: format!("{pct:.1}%"),
+                },
+            ],
+            related_throttle_transition_ids: vec![],
+            related_context_transition_ids: related_context_ids(
+                &input.context_transitions,
+                "cpu.",
+            ),
+        });
+    } else if pct_cpu_1400.is_some_and(|p| p >= CPU_FREQ_LOCK_PCT) {
+        let pct = pct_cpu_1400.unwrap();
+        findings.push(Finding {
+            id: "cpu_frequency_lock".into(),
+            title: "CPU frequency locked near 1400 MHz".into(),
+            severity: FindingSeverity::Warning,
+            confidence: if pct >= 80.0 {
+                FindingConfidence::High
+            } else {
+                FindingConfidence::Medium
+            },
+            summary: format!(
+                "Minimum CPU frequency stayed in the 1350–1450 MHz band for {pct:.0}% of cpufreq samples. Some Framework AMD laptops report this alternate lock state after long idle."
+            ),
+            evidence: vec![
+                EvidenceItem {
+                    ts_unix_ms: latest_context_ts(&input.context_values, "cpu.cur_freq_min_mhz"),
+                    label: "cpu.cur_freq_min_mhz (latest)".into(),
+                    detail: latest_cpu_min_mhz
+                        .map(|v| format!("{v:.0} MHz"))
+                        .unwrap_or_else(|| "unknown".into()),
+                },
+                EvidenceItem {
+                    ts_unix_ms: None,
+                    label: "cpu_freq_1400_band_pct".into(),
+                    detail: format!("{pct:.1}%"),
+                },
+            ],
+            related_throttle_transition_ids: vec![],
+            related_context_transition_ids: related_context_ids(
+                &input.context_transitions,
+                "cpu.",
+            ),
+        });
+    }
+
     // PMF missing (AMD firmware correlation)
     if amd_throttle && !pmf_present {
         let has_pmf_health = input
@@ -649,6 +745,8 @@ fn run_analysis(mut input: AnalysisInput) -> AnalysisReport {
 
     let overall_verdict = if findings.iter().any(|f| f.id == "framework_146_shape") {
         "Likely matches Framework #146 power-cap pattern while dGPU is inactive; review findings and attach export.json.".into()
+    } else if findings.iter().any(|f| f.id == "cpu_frequency_lock") {
+        "CPU frequency appears locked in a low band for much of this window; see cpu_frequency_lock and docs/framework-146-long-idle-capture.md.".into()
     } else if findings.iter().any(|f| f.id == "thermal_limit_shape") {
         "Thermal limiting appears more prominent than a pure firmware SPL cap in this window."
             .into()
@@ -1004,6 +1102,42 @@ mod tests {
             .iter()
             .any(|f| f.id == "prochot_suspect_legacy_status"));
         assert!(report.warnings.iter().any(|w| w.contains("PROCHOT_CPU")));
+    }
+
+    #[test]
+    fn cpu_frequency_lock_545_detected() {
+        let mut rows = Vec::new();
+        for i in 0..20 {
+            rows.push(ctx(
+                i * 500,
+                "cpu.cur_freq_min_mhz",
+                Some(544.0 + (i % 2) as f64),
+                None,
+            ));
+        }
+        let bundle = ExportBundle {
+            schema_version: 1,
+            format: EXPORT_FORMAT.into(),
+            exported_at_ms: 0,
+            from_ms: 0,
+            to_ms: 10_000,
+            device_pci_filter: None,
+            devices: vec![],
+            samples: (0..20).map(|i| sample(i * 500, &[], 40_000)).collect(),
+            throttle_transitions: vec![],
+            throttle_journal_events: vec![],
+            context_snapshots: vec![],
+            context_values: rows,
+            context_transitions: vec![],
+            context_journal_events: vec![],
+            system: None,
+            summary: None,
+            export_warnings: vec![],
+            analysis: None,
+        };
+        let report = analyze_bundle(&bundle, &AnalysisOptions::default());
+        assert!(report.findings.iter().any(|f| f.id == "cpu_frequency_lock"));
+        assert!(report.overall_verdict.contains("frequency"));
     }
 
     #[test]

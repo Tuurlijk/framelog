@@ -2,10 +2,16 @@ use std::collections::HashMap;
 
 use sqlx::Row;
 
+use crate::context::cpu;
 use crate::error::Result;
 use crate::model::{FlagActivitySummary, WindowSummary};
 use crate::store::Store;
 use crate::throttle;
+
+const CPU_LOCK_545_LOW_MHZ: f64 = 500.0;
+const CPU_LOCK_545_HIGH_MHZ: f64 = 620.0;
+const CPU_LOCK_1400_LOW_MHZ: f64 = 1350.0;
+const CPU_LOCK_1400_HIGH_MHZ: f64 = 1450.0;
 
 impl Store {
     pub async fn window_summary_sql(
@@ -59,7 +65,15 @@ impl Store {
             })
             .collect();
         flag_activity.sort_by(|a, b| a.flag_name.cmp(&b.flag_name));
-        let warnings = throttle::prochot_warnings_from_activity(&flag_activity);
+        let mut warnings = throttle::prochot_warnings_from_activity(&flag_activity);
+        let cpu_min_mhz = self.cpu_cur_freq_min_mhz_samples(from_ms, to_ms).await?;
+        let pct_545 =
+            cpu::freq_band_pct_values(&cpu_min_mhz, CPU_LOCK_545_LOW_MHZ, CPU_LOCK_545_HIGH_MHZ);
+        let pct_1400 =
+            cpu::freq_band_pct_values(&cpu_min_mhz, CPU_LOCK_1400_LOW_MHZ, CPU_LOCK_1400_HIGH_MHZ);
+        if let Some(msg) = cpu::cpu_freq_dashboard_warning(pct_545, pct_1400) {
+            warnings.push(msg.into());
+        }
 
         Ok(WindowSummary {
             from_ms,
@@ -177,6 +191,27 @@ impl Store {
                     r.get::<i64, _>("active_count") as u64,
                 )
             })
+            .collect())
+    }
+
+    async fn cpu_cur_freq_min_mhz_samples(&self, from_ms: i64, to_ms: i64) -> Result<Vec<f64>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT value_num
+            FROM context_values
+            WHERE key = 'cpu.cur_freq_min_mhz'
+              AND ts_unix_ms >= ?
+              AND ts_unix_ms <= ?
+              AND value_num IS NOT NULL
+            "#,
+        )
+        .bind(from_ms)
+        .bind(to_ms)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.get::<Option<f64>, _>("value_num"))
             .collect())
     }
 }

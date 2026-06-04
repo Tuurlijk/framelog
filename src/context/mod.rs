@@ -1,4 +1,5 @@
 mod battery;
+pub mod cpu;
 mod display;
 mod fake;
 mod gpu_power;
@@ -13,8 +14,9 @@ use std::collections::HashMap;
 
 use crate::config::Config;
 use crate::context::battery::BatterySource;
+use crate::context::cpu::CpuSource;
 use crate::context::display::DisplaySource;
-use crate::context::fake::{FakeContextSource, FakeGpuPowerSource, FakePmfSource};
+use crate::context::fake::{FakeContextSource, FakeCpuSource, FakeGpuPowerSource, FakePmfSource};
 use crate::context::gpu_power::GpuPowerSource;
 use crate::context::pmf::PmfSource;
 use crate::context::power::PowerSource;
@@ -63,6 +65,7 @@ impl ContextRegistry {
                 Box::new(FakeContextSource::new()),
                 Box::new(FakePmfSource::new()),
                 Box::new(FakeGpuPowerSource::new()),
+                Box::new(FakeCpuSource::new()),
             ]
         } else {
             vec![
@@ -73,6 +76,7 @@ impl ContextRegistry {
                 Box::new(SleepWakeSource::new(config.interval_ms)),
                 Box::new(PmfSource::new()),
                 Box::new(GpuPowerSource::new()),
+                Box::new(CpuSource::new()),
             ]
         };
 

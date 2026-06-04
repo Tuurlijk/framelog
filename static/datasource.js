@@ -72,6 +72,48 @@
       label: 'Power profile',
       format: v => String(v),
     },
+    cpu_cur_freq_min_mhz: {
+      label: 'CPU min freq (latest)',
+      important: true,
+      format(v) {
+        const n = Number(v);
+        return Number.isFinite(n) ? `${n.toFixed(0)} MHz` : String(v);
+      },
+    },
+    cpu_freq_545_band_pct: {
+      label: 'Time near 545 MHz lock',
+      important: true,
+      format(v) {
+        const n = Number(v);
+        return Number.isFinite(n) ? `${n.toFixed(1)}%` : String(v);
+      },
+    },
+    cpu_freq_1400_band_pct: {
+      label: 'Time near 1400 MHz lock',
+      format(v) {
+        const n = Number(v);
+        return Number.isFinite(n) ? `${n.toFixed(1)}%` : String(v);
+      },
+    },
+  };
+
+  const CONTEXT_KEY_LABELS = {
+    'power.ac_connected': 'AC adapter connected',
+    'power.input_watts': 'Charger input (W)',
+    'power.adapter_watts_reported': 'Adapter rating (W)',
+    'pmf.spl_mw': 'PMF slow package limit (SPL)',
+    'pmf.sppt_mw': 'PMF sustained package limit (SPPT)',
+    'pmf.fppt_mw': 'PMF fast package limit (FPPT)',
+    'pmf.stt_hs2_c': 'PMF skin temp limit (STT HS2)',
+    'cpu.cur_freq_min_mhz': 'CPU min frequency (MHz)',
+    'cpu.cur_freq_avg_mhz': 'CPU avg frequency (MHz)',
+    'cpu.cur_freq_max_mhz': 'CPU max frequency (MHz)',
+    'cpu.scaling_max_freq_mhz': 'CPU scaling cap (MHz)',
+    'cpu.governor': 'CPU cpufreq governor',
+    'gpu_power.dgpu_runtime_suspended': 'dGPU runtime suspended',
+    'gpu_power.dgpu_runtime_status': 'dGPU runtime status',
+    'battery.percent': 'Battery charge (%)',
+    'display.external_count': 'External displays',
   };
 
   const KEY_METRIC_ORDER = [
@@ -80,6 +122,8 @@
     'max_temperature_core_c',
     'spl_active_sample_pct',
     'pmf_spl_mw',
+    'cpu_cur_freq_min_mhz',
+    'cpu_freq_545_band_pct',
     'dgpu_runtime_suspended_pct',
     'ac_connected',
     'power_profile',
@@ -160,11 +204,16 @@
     return ts >= from && ts <= to;
   }
 
+  function contextKeyLabel(key) {
+    return CONTEXT_KEY_LABELS[key] ?? key;
+  }
+
   function contextKeyKind(key) {
     const numericSuffixes = [
-      '.percent', '.watts', '_watts', '_mw', '_ms', '_c',
+      '.percent', '.watts', '_watts', '_mw', '_ms', '_c', '_mhz',
       '.ac_connected', '.external_connected', '.external_count', '.input_watts',
       '.adapter_watts_reported', '.dgpu_runtime_suspended', '.dgpu_d3cold_allowed',
+      '.online_cpus',
     ];
     return numericSuffixes.some(s => key.endsWith(s)) ? 'number' : 'enum';
   }
@@ -658,6 +707,8 @@
     EXPORT_FORMAT,
     FLAG_CATALOG,
     KEY_METRIC_LABELS,
+    CONTEXT_KEY_LABELS,
+    contextKeyLabel,
     formatKeyMetric,
     sortKeyMetricEntries,
   };

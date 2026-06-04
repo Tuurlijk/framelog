@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::collector::CollectorKind;
-use crate::context::pmf;
+use crate::context::{pmf, sysfs};
 use crate::hardware::drm::{self, DrmCard};
 use crate::hardware::intel;
 use crate::version;
@@ -216,6 +216,7 @@ fn pmf_limits_readable() -> bool {
 }
 
 fn probe_context_sources(pmf_ok: bool, cards: &[DrmCardSummary]) -> Vec<ContextSourceCapability> {
+    let cpu_ok = cpufreq_readable();
     vec![
         ContextSourceCapability {
             id: "power".into(),
@@ -256,7 +257,31 @@ fn probe_context_sources(pmf_ok: bool, cards: &[DrmCardSummary]) -> Vec<ContextS
             available: !cards.is_empty(),
             detail: "DRM runtime status for detected cards".into(),
         },
+        ContextSourceCapability {
+            id: "cpu".into(),
+            available: cpu_ok,
+            detail: if cpu_ok {
+                "sysfs cpufreq scaling_cur_freq per online CPU".into()
+            } else {
+                "requires /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq".into()
+            },
+        },
     ]
+}
+
+fn cpufreq_readable() -> bool {
+    let cpus_root = sysfs::sysfs_root().join("devices/system/cpu");
+    let Ok(entries) = std::fs::read_dir(cpus_root) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        name.strip_prefix("cpu").is_some_and(|suffix| {
+            !suffix.is_empty()
+                && suffix.chars().all(|c| c.is_ascii_digit())
+                && std::fs::read_to_string(entry.path().join("cpufreq/scaling_cur_freq")).is_ok()
+        })
+    })
 }
 
 #[cfg(test)]

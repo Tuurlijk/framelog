@@ -67,15 +67,39 @@ cargo build --release
 sudo install -m755 target/release/framelog /usr/local/bin/framelog
 ```
 
+## Install Service
+
+Install the release binary and register the systemd service:
+
+```bash
+sudo scripts/install-service.sh
+```
+
+Useful variants:
+
+```bash
+sudo scripts/install-service.sh --collector intel
+sudo scripts/install-service.sh --bind 0.0.0.0:8787 --no-start
+cargo build --release
+sudo scripts/install-service.sh --no-build
+```
+
+The installer writes `/usr/local/bin/framelog`, installs `framelog.service`,
+runs `systemctl daemon-reload`, then enables and starts the service by default.
+After install:
+
+```bash
+systemctl status framelog.service
+journalctl -u framelog.service -f
+xdg-open http://127.0.0.1:8787
+```
+
 ## Quick start
 
 **Continuous logging (typical on a Framework 16):**
 
 ```bash
-# install systemd unit (once)
-sudo install -D -m644 systemd/framelog.service /etc/systemd/system/framelog.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now framelog.service
+sudo scripts/install-service.sh
 
 # open dashboard — live DB updates while the service runs
 xdg-open http://127.0.0.1:8787
@@ -295,6 +319,14 @@ When filing or reviewing traces for [issue #146](https://github.com/FrameworkCom
 - Charger (`power.ac_connected`, `power.input_watts`, `power.adapter_watts_reported`)
 - PMF limits (`pmf.*`) when debugfs is readable
 - Throttle flags (`SPL`, `PROCHOT_CPU`) and APU power/temperature
+
+For the reported `\_SB_.PCI0.GPP0.M241(1)` / `M241(0)` race trigger, see
+[docs/framework-146-m241-trigger-capture.md](docs/framework-146-m241-trigger-capture.md).
+
+For the **544/545 MHz (or ~1400 MHz) CPU frequency lock** after long idle, see
+[docs/framework-146-long-idle-capture.md](docs/framework-146-long-idle-capture.md).
+That workflow uses normal read-only collection; the explicit opt-in ACPI helper
+is only for the M241 trigger path.
 
 **PMF limits (live)** come from `/sys/kernel/debug/amd_pmf/current_power_limits`. **Full ACPI `STTC` tables** live in firmware AML; see [this discussion](https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/146#issuecomment-2908435584). `framelog` does not modify firmware or call `ryzenadj` from the hot path.
 

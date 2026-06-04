@@ -57,6 +57,8 @@ fn context_key_kind(key: &str) -> ContextValueKind {
         || key.ends_with("_mw")
         || key.ends_with("_ms")
         || key.ends_with("_c")
+        || key.ends_with("_mhz")
+        || key.ends_with(".online_cpus")
         || key.ends_with(".ac_connected")
         || key.ends_with(".external_connected")
         || key.ends_with(".external_count")
