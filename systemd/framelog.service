@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/framelog run --db /var/lib/framelog/framelog.db --bind 127.0.0.1:8787 --journal-before-secs 60 --journal-after-secs 30
+ExecStart=/usr/local/bin/framelog run --db /var/lib/framelog/framelog.db --bind 127.0.0.1:8787 --journal-before-secs 60 --journal-after-secs 30 --retention-hours 24
 Restart=on-failure
 RestartSec=5
 # Read gpu_metrics from sysfs; root is simplest on first install.

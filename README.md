@@ -212,6 +212,14 @@ framelog capture --duration 300s --collector fake --skip-pre-backup
 
 ## Data maintenance
 
+The collector prunes telemetry older than **24 hours** by default (`--retention-hours`, set `0` to keep all data). Pruning runs at service start and hourly. New databases use WAL mode and incremental auto-vacuum; after upgrading from a large existing database, reclaim disk space once with:
+
+```bash
+sudo systemctl stop framelog.service
+sqlite3 /var/lib/framelog/framelog.db 'VACUUM;'
+sudo systemctl start framelog.service
+```
+
 `framelog dump` exports the full stored range (CLI has no 7-day web limit). `dump` and `reset` backups embed an `analysis` block in the JSON.
 
 `framelog capture` and `framelog reset --yes` refuse to run while the database is still receiving samples (for example when `framelog.service` is active). Stop the collector first:

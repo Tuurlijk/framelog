@@ -18,6 +18,7 @@ use crate::system_info;
 use crate::throttle::diff_flags;
 
 const SYSTEM_INFO_REFRESH: Duration = Duration::from_secs(24 * 60 * 60);
+const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 pub struct CollectorService {
     store: Arc<Store>,
@@ -61,8 +62,12 @@ impl CollectorService {
         system_info_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
         tracing::info!(interval_ms = self.config.interval_ms, "collector started");
+        self.prune_if_enabled("startup").await;
         self.harvest_system_info().await;
         system_info_interval.tick().await;
+        let mut prune_interval = time::interval(PRUNE_INTERVAL);
+        prune_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        prune_interval.tick().await;
 
         loop {
             tokio::select! {
@@ -74,7 +79,45 @@ impl CollectorService {
                 _ = system_info_interval.tick() => {
                     self.harvest_system_info().await;
                 }
+                _ = prune_interval.tick() => {
+                    self.prune_if_enabled("scheduled").await;
+                }
             }
+        }
+    }
+
+    async fn prune_if_enabled(&self, reason: &'static str) {
+        let hours = self.config.retention_hours;
+        if hours == 0 {
+            return;
+        }
+        let cutoff = crate::util::current_ts_ms().saturating_sub(hours as i64 * 3_600_000);
+        match self.store.prune_older_than(cutoff).await {
+            Ok(stats) => {
+                let total = stats.journal_events
+                    + stats.context_journal_events
+                    + stats.transitions
+                    + stats.context_transitions
+                    + stats.context_values
+                    + stats.context_snapshots
+                    + stats.samples
+                    + stats.capture_markers
+                    + stats.system_info_snapshots;
+                if total > 0 {
+                    tracing::info!(
+                        reason,
+                        retention_hours = hours,
+                        cutoff_ms = cutoff,
+                        samples = stats.samples,
+                        context_snapshots = stats.context_snapshots,
+                        context_values = stats.context_values,
+                        transitions = stats.transitions,
+                        context_transitions = stats.context_transitions,
+                        "pruned old telemetry"
+                    );
+                }
+            }
+            Err(err) => tracing::warn!(%err, reason, "retention prune failed"),
         }
     }
 

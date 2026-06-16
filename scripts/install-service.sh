@@ -10,6 +10,7 @@ COLLECTOR="lib-amdgpu"
 INTERVAL_MS="1000"
 JOURNAL_BEFORE_SECS="60"
 JOURNAL_AFTER_SECS="30"
+RETENTION_HOURS="24"
 BUILD="1"
 ENABLE="1"
 START="1"
@@ -31,6 +32,7 @@ Options:
   --interval-ms N          Sample interval in milliseconds (default: 1000)
   --journal-before-secs N  Journal window before transitions (default: 60)
   --journal-after-secs N   Journal window after transitions (default: 30)
+  --retention-hours N      Rolling SQLite retention in hours (default: 24, 0=keep all)
   --apu-only               Pass --apu-only to framelog run
   --no-build               Install existing target/release/framelog
   --no-enable              Do not enable the service at boot
@@ -117,6 +119,10 @@ while [[ $# -gt 0 ]]; do
       JOURNAL_AFTER_SECS="${2:?missing value for --journal-after-secs}"
       shift 2
       ;;
+    --retention-hours)
+      RETENTION_HOURS="${2:?missing value for --retention-hours}"
+      shift 2
+      ;;
     --apu-only)
       APU_ONLY="1"
       shift
@@ -153,6 +159,7 @@ esac
 [[ "$INTERVAL_MS" =~ ^[0-9]+$ ]] || die "--interval-ms must be an integer"
 [[ "$JOURNAL_BEFORE_SECS" =~ ^[0-9]+$ ]] || die "--journal-before-secs must be an integer"
 [[ "$JOURNAL_AFTER_SECS" =~ ^[0-9]+$ ]] || die "--journal-after-secs must be an integer"
+[[ "$RETENTION_HOURS" =~ ^[0-9]+$ ]] || die "--retention-hours must be an integer"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -182,6 +189,7 @@ run_args=(
   --interval-ms "$INTERVAL_MS"
   --journal-before-secs "$JOURNAL_BEFORE_SECS"
   --journal-after-secs "$JOURNAL_AFTER_SECS"
+  --retention-hours "$RETENTION_HOURS"
 )
 if [[ "$APU_ONLY" == "1" ]]; then
   run_args+=(--apu-only)

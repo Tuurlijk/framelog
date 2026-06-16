@@ -10,7 +10,7 @@ Core areas:
 - `src/collector.rs` — AMDGPU metric collection via `libamdgpu_top`, plus fake
   and `amdgpu_top` JSON collectors for testing/debugging.
 - `src/throttle.rs` — stable throttle flag names and transition diffing.
-- `src/store.rs` — SQLite schema and query layer.
+- `src/store.rs` — SQLite schema, retention pruning, and query layer.
 - `src/journal.rs` — systemd journal lookups around interesting transitions.
 - `src/service.rs` — sampler loop and transition orchestration.
 - `src/system_info.rs` — cached Linux system inventory from read-only
@@ -21,6 +21,10 @@ Core areas:
 Keep data acquisition modular. Hardware, OS, and desktop context sources should
 be isolated behind small interfaces so future signals can be added without
 rewriting storage, transition logic, or the UI.
+
+The collector keeps a rolling SQLite window (default 24h via `--retention-hours`)
+so long-running installs stay fast. Pruning runs at startup and hourly; WAL and
+incremental auto-vacuum are enabled on open.
 
 For [Framework issue #146](https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/146)
 power-cap debugging, prioritize read-only evidence that ties together dGPU runtime

@@ -10,6 +10,8 @@ pub struct Config {
     pub journal_after_secs: i64,
     pub apu_only: bool,
     pub fake: bool,
+    /// Rolling retention window for telemetry rows. `0` disables automatic pruning.
+    pub retention_hours: u64,
 }
 
 impl Default for Config {
@@ -22,6 +24,7 @@ impl Default for Config {
             journal_after_secs: 30,
             apu_only: false,
             fake: false,
+            retention_hours: 24,
         }
     }
 }

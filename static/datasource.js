@@ -350,7 +350,7 @@
       };
     }
 
-    timeBounds() {
+    async timeBounds() {
       const samples = this.bundle.samples || [];
       const ctx = this.bundle.context_snapshots || [];
       let min = null;
@@ -371,12 +371,12 @@
       };
     }
 
-    devices() {
+    async devices() {
       const devices = this.bundle.devices || [];
       return { devices };
     }
 
-    flags() {
+    async flags() {
       const observed = new Set();
       for (const s of this.bundle.samples || []) {
         for (const f of s.active_flags || []) observed.add(f);
@@ -388,7 +388,7 @@
       return { flags, catalog: FLAG_CATALOG };
     }
 
-    summary(opts) {
+    async summary(opts) {
       const { from, to, device_pci } = opts;
       const samples = this._samplesInRange(from, to, device_pci);
       const transitions = this._throttleTransitionsInRange(from, to, device_pci, null, null);
@@ -453,7 +453,7 @@
       };
     }
 
-    series(flag, opts) {
+    async series(flag, opts) {
       const { from, to, device_pci, max_points } = opts;
       let points = this._samplesInRange(from, to, device_pci)
         .map(s => ({
@@ -464,7 +464,7 @@
       return { flag, points };
     }
 
-    metrics(metric, opts) {
+    async metrics(metric, opts) {
       const { from, to, device_pci, max_points } = opts;
       const field = metricField(metric);
       if (!field) throw new Error(`unknown metric: ${metric}`);
@@ -484,7 +484,7 @@
       };
     }
 
-    transitions(opts) {
+    async transitions(opts) {
       const {
         from, to, device_pci, flag_name, direction, limit = 100,
       } = opts;
@@ -493,7 +493,7 @@
       return items.slice(0, limit);
     }
 
-    transitionJournal(ids) {
+    async transitionJournal(ids) {
       const out = [];
       for (const id of ids) {
         const list = this._throttleJournal.get(id) || [];
@@ -502,13 +502,13 @@
       return out;
     }
 
-    contextKeys() {
+    async contextKeys() {
       const keys = new Set();
       for (const row of this.bundle.context_values || []) keys.add(row.key);
       return { keys: [...keys].sort() };
     }
 
-    contextSeries(key, opts) {
+    async contextSeries(key, opts) {
       const { from, to, max_points } = opts;
       const value_kind = contextKeyKind(key);
       const rows = (this.bundle.context_values || [])
@@ -539,14 +539,14 @@
       };
     }
 
-    contextTransitions(opts) {
+    async contextTransitions(opts) {
       const { from, to, limit = 100 } = opts;
       let items = this._contextTransitionsInRange(from, to, null, null);
       items.sort((a, b) => b.ts_unix_ms - a.ts_unix_ms);
       return items.slice(0, limit);
     }
 
-    contextJournal(ids) {
+    async contextJournal(ids) {
       const out = [];
       for (const id of ids) {
         const list = this._contextJournal.get(id) || [];
@@ -555,7 +555,7 @@
       return out;
     }
 
-    contextHealth() {
+    async contextHealth() {
       const latest = new Map();
       for (const s of this.bundle.context_snapshots || []) {
         const prev = latest.get(s.source_id);
@@ -571,11 +571,11 @@
       return [...latest.values()].sort((a, b) => a.source_id.localeCompare(b.source_id));
     }
 
-    system() {
+    async system() {
       return this.bundle.system ?? null;
     }
 
-    refreshSystem() {
+    async refreshSystem() {
       return this.system();
     }
 
@@ -598,7 +598,7 @@
       return res.json();
     }
 
-    mergedEvents(opts) {
+    async mergedEvents(opts) {
       const { from, to, device_pci, flagNames } = opts;
       const events = [];
       const flagSet = flagNames?.length ? new Set(flagNames) : null;

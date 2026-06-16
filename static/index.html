@@ -27,9 +27,9 @@
         <span class="toolbar-label">Time window</span>
         <div class="segmented time-bar" id="presets">
           <button type="button" class="secondary" data-ms="900000">15m</button>
-          <button type="button" class="secondary" data-ms="3600000">1h</button>
+          <button type="button" class="secondary active" data-ms="3600000">1h</button>
           <button type="button" class="secondary" data-ms="21600000">6h</button>
-          <button type="button" class="secondary active" data-ms="86400000">24h</button>
+          <button type="button" class="secondary" data-ms="86400000">24h</button>
           <button type="button" class="secondary" data-ms="604800000">7d</button>
           <button type="button" class="secondary" id="reset-latest">Latest</button>
         </div>
@@ -236,7 +236,7 @@
 
     let timeBounds = null;
     let capabilities = null;
-    const rangeState = { tail: true, presetMs: 86_400_000, from: null, to: null };
+    const rangeState = { tail: true, presetMs: 3_600_000, from: null, to: null };
     let dataSource = new ApiDataSource(api);
     let lastDumpBundle = null;
     const playbackState = { events: [], index: -1, timer: null, playing: false };
@@ -324,7 +324,7 @@
         deviceEl.value = meta.device_pci_filter;
       }
       updateModeBanner();
-      timeBounds = dataSource.timeBounds();
+      timeBounds = await dataSource.timeBounds();
       await loadDevices();
       await loadFlags();
       await loadContextKeys();

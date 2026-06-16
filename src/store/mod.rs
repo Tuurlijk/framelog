@@ -26,6 +26,52 @@ pub const MAX_EXPORT_SAMPLES: i64 = 500_000;
 pub const EXPORT_TRANSITION_LIMIT: i64 = 100_000;
 /// SQLite bind-parameter budget for `IN (...)` journal lookups (stay well under 999).
 const JOURNAL_IN_BATCH: usize = 500;
+/// Distinct-key lookup window for `context_keys()` (avoids full-table scans).
+const CONTEXT_KEYS_LOOKBACK_MS: i64 = 48 * 60 * 60 * 1000;
+
+/// Stable catalog of context keys emitted by built-in sources (`source_id.key`).
+pub const KNOWN_CONTEXT_KEYS: &[&str] = &[
+    "battery.percent",
+    "battery.power_watts",
+    "battery.state",
+    "cpu.cur_freq_avg_mhz",
+    "cpu.cur_freq_max_mhz",
+    "cpu.cur_freq_min_mhz",
+    "cpu.governor",
+    "cpu.online_cpus",
+    "cpu.scaling_max_freq_mhz",
+    "display.external_connected",
+    "display.external_count",
+    "gpu_power.dgpu_d3cold_allowed",
+    "gpu_power.dgpu_runtime_active_ms",
+    "gpu_power.dgpu_runtime_status",
+    "gpu_power.dgpu_runtime_suspended",
+    "gpu_power.dgpu_runtime_suspended_ms",
+    "pmf.fppt_mw",
+    "pmf.spl_mw",
+    "pmf.sppt_apu_only_mw",
+    "pmf.sppt_mw",
+    "pmf.stt_apu_c",
+    "pmf.stt_min_c",
+    "power.ac_connected",
+    "power.adapter_watts_reported",
+    "power.input_watts",
+    "profile.active",
+    "sleep.event",
+];
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PruneStats {
+    pub journal_events: u64,
+    pub context_journal_events: u64,
+    pub transitions: u64,
+    pub context_transitions: u64,
+    pub context_values: u64,
+    pub context_snapshots: u64,
+    pub samples: u64,
+    pub capture_markers: u64,
+    pub system_info_snapshots: u64,
+}
 use crate::throttle::flag_active;
 
 fn context_str_to_num(s: &str) -> f64 {
@@ -93,8 +139,19 @@ impl Store {
             .await?;
 
         let store = Self { pool };
+        store.apply_pragmas().await?;
         store.migrate().await?;
         Ok(store)
+    }
+
+    async fn apply_pragmas(&self) -> Result<()> {
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("PRAGMA auto_vacuum=INCREMENTAL")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     async fn migrate(&self) -> Result<()> {
@@ -128,6 +185,7 @@ impl Store {
                 FOREIGN KEY (sample_id) REFERENCES samples(id)
             );
             CREATE INDEX IF NOT EXISTS idx_transitions_ts ON transitions(ts_unix_ms);
+            CREATE INDEX IF NOT EXISTS idx_transitions_pci_ts ON transitions(device_pci, ts_unix_ms);
 
             CREATE TABLE IF NOT EXISTS journal_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +197,7 @@ impl Store {
                 cursor TEXT,
                 FOREIGN KEY (transition_id) REFERENCES transitions(id)
             );
+            CREATE INDEX IF NOT EXISTS idx_journal_events_transition_id ON journal_events(transition_id);
 
             CREATE TABLE IF NOT EXISTS context_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,6 +221,7 @@ impl Store {
                 FOREIGN KEY (snapshot_id) REFERENCES context_snapshots(id)
             );
             CREATE INDEX IF NOT EXISTS idx_context_values_key_ts ON context_values(key, ts_unix_ms);
+            CREATE INDEX IF NOT EXISTS idx_context_values_ts ON context_values(ts_unix_ms);
 
             CREATE TABLE IF NOT EXISTS context_transitions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -184,6 +244,7 @@ impl Store {
                 message TEXT NOT NULL,
                 FOREIGN KEY (context_transition_id) REFERENCES context_transitions(id)
             );
+            CREATE INDEX IF NOT EXISTS idx_context_journal_events_transition_id ON context_journal_events(context_transition_id);
 
             CREATE TABLE IF NOT EXISTS system_info_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -830,14 +891,29 @@ impl Store {
     }
 
     pub async fn context_keys(&self) -> Result<Vec<String>> {
+        use std::collections::BTreeSet;
+
+        let mut keys: BTreeSet<String> = KNOWN_CONTEXT_KEYS
+            .iter()
+            .map(|k| (*k).to_string())
+            .collect();
+
+        let cutoff = crate::util::current_ts_ms().saturating_sub(CONTEXT_KEYS_LOOKBACK_MS);
         let rows = sqlx::query(
             r#"
-            SELECT DISTINCT key FROM context_values ORDER BY key ASC
+            SELECT DISTINCT key FROM context_values
+            WHERE ts_unix_ms >= ?
+            ORDER BY key ASC
             "#,
         )
+        .bind(cutoff)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(|r| r.get("key")).collect())
+        for row in rows {
+            keys.insert(row.get("key"));
+        }
+
+        Ok(keys.into_iter().collect())
     }
 
     pub async fn latest_context_health(&self) -> Result<Vec<ContextSourceStatus>> {
@@ -871,10 +947,9 @@ impl Store {
         let row = sqlx::query(
             r#"
             SELECT
-                (SELECT MIN(ts_unix_ms) FROM samples) AS min_sample_ts,
-                (SELECT MAX(ts_unix_ms) FROM samples) AS max_sample_ts,
-                (SELECT COUNT(*) FROM samples) AS sample_count,
-                (SELECT COUNT(*) FROM context_snapshots) AS context_snapshot_count
+                MIN(ts_unix_ms) AS min_sample_ts,
+                MAX(ts_unix_ms) AS max_sample_ts
+            FROM samples
             "#,
         )
         .fetch_one(&self.pool)
@@ -900,11 +975,19 @@ impl Store {
             (a, b) => a.or(b),
         };
 
+        let sample_count = if min_sample.is_some() {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM samples")
+                .fetch_one(&self.pool)
+                .await?
+        } else {
+            0
+        };
+
         Ok(TimeBounds {
             min_ts_ms,
             max_ts_ms,
-            sample_count: row.get("sample_count"),
-            context_snapshot_count: row.get("context_snapshot_count"),
+            sample_count,
+            context_snapshot_count: 0,
         })
     }
 
@@ -921,6 +1004,95 @@ impl Store {
             )));
         }
         Ok(())
+    }
+
+    /// Delete telemetry older than `cutoff_ms`. Child journal rows are removed first.
+    pub async fn prune_older_than(&self, cutoff_ms: i64) -> Result<PruneStats> {
+        let mut tx = self.pool.begin().await?;
+        let stats = PruneStats {
+            journal_events: sqlx::query(
+                r#"
+                DELETE FROM journal_events
+                WHERE transition_id IN (SELECT id FROM transitions WHERE ts_unix_ms < ?)
+                "#,
+            )
+            .bind(cutoff_ms)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected(),
+            context_journal_events: sqlx::query(
+                r#"
+                DELETE FROM context_journal_events
+                WHERE context_transition_id IN (
+                    SELECT id FROM context_transitions WHERE ts_unix_ms < ?
+                )
+                "#,
+            )
+            .bind(cutoff_ms)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected(),
+            transitions: sqlx::query("DELETE FROM transitions WHERE ts_unix_ms < ?")
+                .bind(cutoff_ms)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected(),
+            context_transitions: sqlx::query("DELETE FROM context_transitions WHERE ts_unix_ms < ?")
+                .bind(cutoff_ms)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected(),
+            context_values: sqlx::query("DELETE FROM context_values WHERE ts_unix_ms < ?")
+                .bind(cutoff_ms)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected(),
+            context_snapshots: sqlx::query("DELETE FROM context_snapshots WHERE ts_unix_ms < ?")
+                .bind(cutoff_ms)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected(),
+            samples: sqlx::query("DELETE FROM samples WHERE ts_unix_ms < ?")
+                .bind(cutoff_ms)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected(),
+            capture_markers: sqlx::query("DELETE FROM capture_markers WHERE ts_unix_ms < ?")
+                .bind(cutoff_ms)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected(),
+            system_info_snapshots: sqlx::query(
+                r#"
+                DELETE FROM system_info_snapshots
+                WHERE collected_at_ms < ?
+                  AND collected_at_ms < (SELECT MAX(collected_at_ms) FROM system_info_snapshots)
+                "#,
+            )
+            .bind(cutoff_ms)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected(),
+        };
+
+        tx.commit().await?;
+
+        let deleted = stats.journal_events
+            + stats.context_journal_events
+            + stats.transitions
+            + stats.context_transitions
+            + stats.context_values
+            + stats.context_snapshots
+            + stats.samples
+            + stats.capture_markers
+            + stats.system_info_snapshots;
+        if deleted > 0 {
+            let _ = sqlx::query("PRAGMA incremental_vacuum(64)")
+                .execute(&self.pool)
+                .await;
+        }
+
+        Ok(stats)
     }
 
     pub async fn reset_data_collection(&self) -> Result<()> {
@@ -1894,5 +2066,85 @@ mod tests {
         assert_eq!(series.value_kind, ContextValueKind::Number);
         assert_eq!(series.points.len(), 1);
         assert_eq!(series.points[0].value, 1.0);
+    }
+
+    #[tokio::test]
+    async fn prune_older_than_removes_stale_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("prune.db")).await.unwrap();
+        let old_ts = 1_700_000_000_000_i64;
+        let new_ts = old_ts + 3_600_000;
+
+        let sample_old = MetricSample {
+            ts_unix_ms: old_ts,
+            device_pci: "0000:c1:00.0".into(),
+            device_name: "GPU".into(),
+            throttle_status_raw: None,
+            indep_throttle_status: 0,
+            active_flags: vec![],
+            apu_power_mw: None,
+            stapm_limit_mw: None,
+            current_stapm_limit_mw: None,
+            temperature_core_max: None,
+            extra_json: None,
+        };
+        let sid_old = store.insert_sample(&sample_old).await.unwrap();
+        store
+            .insert_transition(old_ts, sid_old, "0000:c1:00.0", "SPL", false, true)
+            .await
+            .unwrap();
+
+        let sample_new = MetricSample {
+            ts_unix_ms: new_ts,
+            device_pci: "0000:c1:00.0".into(),
+            device_name: "GPU".into(),
+            throttle_status_raw: None,
+            indep_throttle_status: 0,
+            active_flags: vec![],
+            apu_power_mw: Some(30_000),
+            stapm_limit_mw: None,
+            current_stapm_limit_mw: None,
+            temperature_core_max: None,
+            extra_json: None,
+        };
+        store.insert_sample(&sample_new).await.unwrap();
+
+        let snap = ContextSnapshot {
+            source_id: "power".into(),
+            ts_unix_ms: old_ts,
+            health: "ok".into(),
+            values: vec![ContextValue::num("ac_connected", 1.0)],
+            raw_json: "{}".into(),
+            error_message: None,
+        };
+        let csid = store.insert_context_snapshot(&snap).await.unwrap();
+        store
+            .insert_context_value(
+                csid,
+                old_ts,
+                "power",
+                &ContextValue::num("power.ac_connected", 1.0),
+            )
+            .await
+            .unwrap();
+
+        let stats = store.prune_older_than(old_ts + 1).await.unwrap();
+        assert!(stats.samples >= 1);
+        assert!(stats.context_snapshots >= 1);
+
+        let bounds = store.time_bounds().await.unwrap();
+        assert_eq!(bounds.sample_count, 1);
+        assert_eq!(bounds.min_ts_ms, Some(new_ts));
+        assert_eq!(bounds.max_ts_ms, Some(new_ts));
+
+        let keys = store.context_keys().await.unwrap();
+        assert!(keys.iter().any(|k| k == "power.ac_connected"));
+
+        let listed = store
+            .list_samples(new_ts - 1, new_ts + 1, None)
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].apu_power_mw, Some(30_000));
     }
 }

@@ -61,6 +61,10 @@ struct Cli {
 
     #[arg(long, global = true, value_enum, default_value_t = CollectorKind::LibAmdgpu)]
     collector: CollectorKind,
+
+    /// Rolling retention for telemetry in SQLite (hours). `0` keeps all data.
+    #[arg(long, global = true, default_value_t = 24)]
+    retention_hours: u64,
 }
 
 #[derive(Subcommand, Debug)]
@@ -189,6 +193,7 @@ async fn main() -> Result<()> {
     config.journal_after_secs = cli.journal_after_secs;
     config.apu_only = cli.apu_only;
     config.fake = matches!(cli.collector, CollectorKind::Fake);
+    config.retention_hours = cli.retention_hours;
 
     match cli.command {
         Commands::Collect => run_collect(config, cli.collector).await,
