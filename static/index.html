@@ -885,7 +885,7 @@
         <td>${esc(e.summary)}</td>
         <td>${esc(e.source)}</td>
         <td>${e.journalCount ? `<span class="badge badge-journal">${e.journalCount}</span>` : '<span class="empty">—</span>'}</td>
-      </tr>`).join('');
+      </tr>`);
 
       eventTimelineEl.innerHTML = `<div class="table-wrap"><table>
         <thead><tr><th>Time</th><th>Type</th><th>Summary</th><th>Source</th><th>Journal</th></tr></thead>
